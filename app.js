@@ -87,13 +87,24 @@ const FACT_DEF = () => ({
   igv: true, igvPct: 18, serieB: 'B001', numB: 1, serieF: 'F001', numF: 1, formato: 'A4', medida: true,
   pie: 'Gracias por su preferencia. Presente este documento para recoger sus lentes.', cuentas: '', logo: '', logoRatio: 1,
 });
+// Siglas con las que se describe cada montura: D.M FELL CU/C VER/RO = dama, metal, Fellis, cuadrada, completa, verde/rosa.
+// Se pueden cambiar en Ajustes → Siglas del inventario.
+const ABREV_DEF = () => ({
+  genero: [['Dama', 'D'], ['Caballero', 'C'], ['Niño', 'N'], ['Unisex', 'U']],
+  material: [['Metal', 'M'], ['Pasta', 'P'], ['TR90', 'TR'], ['Titanio', 'TI'], ['Mixta', 'MX']],
+  forma: [['Cuadrada', 'CU'], ['Rectangular', 'REC'], ['Redonda', 'RE'], ['Ovalada', 'OV'], ['Aviador', 'AV'], ['Cat eye', 'CAT'], ['Hexagonal', 'HEX'], ['Mariposa', 'MAR']],
+  aro: [['Completa', 'C'], ['Semi al aire', 'S/A'], ['Al aire', 'A/A']],
+  color: [['Negro', 'NEG'], ['Blanco', 'BLA'], ['Gris', 'GRI'], ['Plateado', 'PLA'], ['Dorado', 'D'], ['Marrón', 'MAR'], ['Carey', 'CAR'], ['Azul', 'AZ'], ['Celeste', 'CEL'],
+    ['Verde', 'VER'], ['Rosa', 'RO'], ['Rojo', 'ROJ'], ['Vino', 'VIN'], ['Morado', 'MOR'], ['Amarillo', 'AMA'], ['Nude', 'NUD'], ['Transparente', 'TRA']],
+});
+const ABREV_GRUPOS = [['genero', 'Para'], ['material', 'Material'], ['forma', 'Forma'], ['aro', 'Aro'], ['color', 'Colores']];
 let db = load();
 let user = null;
 try { user = sessionStorage.getItem(SESSION); } catch (e) { }
 
 function blank() {
   return {
-    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, socios: [], fact: FACT_DEF() },
+    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, nextMontura: 1, socios: [], fact: FACT_DEF(), abrev: ABREV_DEF() },
     pacientes: [], medidas: [], monturas: [], cristales: [], ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [], comprobantes: [],
   };
 }
@@ -107,6 +118,13 @@ function normDb(d) {
   if (!d.config.fact.ruc && d.config.ruc) d.config.fact.ruc = d.config.ruc;
   if (!d.config.fact.direccion && d.config.direccion) d.config.fact.direccion = d.config.direccion;
   d.comprobantes = d.comprobantes || [];
+  const ab = ABREV_DEF(); d.config.abrev = Object.assign(ab, d.config.abrev || {});
+  const deTabla = s => (ab.color.find(([n]) => n.toLowerCase() === s.toLowerCase()) || [s])[0];
+  d.monturas.forEach(m => {
+    if (!m.colores) m.colores = m.color ? String(m.color).split(/\s*(?:\/|,|\s+y\s+|\s+con\s+)\s*/i).map(s => s.trim()).filter(Boolean).map(deTabla) : [];
+    if (m.material === 'Acetato') m.material = 'Pasta';
+    if (m.material === 'Aire / al aire') { m.material = ''; m.aro = m.aro || 'Al aire'; }
+  });
   return d;
 }
 // La primera vez pone el logo de la óptica en los comprobantes; luego se puede cambiar en Ajustes.
@@ -656,7 +674,7 @@ routes['nueva-orden'] = {
               <button class="btn sm mt-s" id="newp2">${icon('plus')} Paciente nuevo</button>`}
           </div></div>
           <div class="card"><div class="card-h"><h3>2 · Productos</h3></div><div class="card-b">
-            <div class="fg"><label class="f">Montura por código<input class="inp" id="mcode" list="mlist" placeholder="Escribe el código…" autocomplete="off"><datalist id="mlist">${db.monturas.map(m => `<option value="${esc(m.codigo)}">${esc(m.marca)} ${esc(m.modelo)} · ${money(m.precio)} · stock ${m.stock}</option>`).join('')}</datalist></label>
+            <div class="fg"><div class="fld">Montura<div class="search" style="max-width:none">${icon('search')}<input id="mcode" placeholder="N° de varilla, marca o sigla…" autocomplete="off"><div class="sr" id="mres" hidden></div></div></div>
             <label class="f">Cristales<select class="inp" id="csel"><option value="">Elegir de la lista de precios…</option>${db.cristales.map(c => `<option value="${c.id}">${esc(c.nombre)} — ${money(c.precio)}</option>`).join('')}</select></label></div>
             <div class="tbl-wrap mt"><table class="items"><thead><tr><th>Descripción</th><th class="c" style="width:70px">Cant.</th><th class="r" style="width:120px">Precio</th><th class="r" style="width:110px">Subtotal</th><th style="width:40px"></th></tr></thead><tbody id="itbody"></tbody></table></div>
             <button class="btn sm mt-s" id="addo">${icon('plus')} Otro producto o servicio</button>
@@ -696,14 +714,11 @@ routes['nueva-orden'] = {
       $('#tresta').textContent = money(Math.max(0, tot - num($('#abono').value)));
     };
     $('#tdesc').oninput = calc; $('#abono').oninput = calc;
-    $('#mcode').onchange = () => {
-      const code = $('#mcode').value.trim().toLowerCase();
-      const m = db.monturas.find(x => x.codigo.toLowerCase() === code);
-      if (!m) { toast('No hay montura con ese código'); return; }
+    buscadorMonturas($('#mcode'), $('#mres'), m => {
       if (num(m.stock) <= 0) toast('Atención: esta montura figura sin stock');
-      draft.items.push({ tipo: 'montura', ref: m.id, desc: `Montura ${m.codigo} · ${m.marca} ${m.modelo}${m.color ? ' ' + m.color : ''}`, cant: 1, precio: m.precio });
-      $('#mcode').value = ''; drawItems();
-    };
+      draft.items.push({ tipo: 'montura', ref: m.id, desc: descMontura(m), cant: 1, precio: m.precio });
+      drawItems();
+    });
     $('#csel').onchange = () => {
       const c = db.cristales.find(x => x.id === $('#csel').value); if (!c) return;
       draft.items.push({ tipo: 'cristal', ref: c.id, desc: 'Cristales ' + c.nombre, cant: 1, precio: c.precio });
@@ -1294,6 +1309,73 @@ function cajaCSV(d) {
   saveFile(`Caja ${d}.csv`, '\ufeff' + rows.map(r => r.map(q).join(',')).join('\r\n'));
 }
 
+// ---------- Monturas: siglas y búsqueda ----------
+const sinTilde = s => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const alnum = s => sinTilde(s).replace(/[^a-z0-9]/g, '');
+const abrev = () => db.config.abrev;
+// Sigla de un valor (Dama → D); si no está en la tabla se usan sus 3 primeras letras.
+const abr = (g, v) => v ? ((abrev()[g] || []).find(([n]) => sinTilde(n) === sinTilde(v)) || [, alnum(v).slice(0, 3).toUpperCase()])[1] : '';
+const abrMarca = marca => alnum(marca).slice(0, 4).toUpperCase();
+// Si la marca ya se usó, se repite la sigla que se le puso antes.
+const abrMarcaUsada = marca => (db.monturas.find(x => x.marcaAbr && alnum(x.marca) === alnum(marca)) || {}).marcaAbr || abrMarca(marca);
+function siglaMontura(m) {
+  const gm = [abr('genero', m.genero), abr('material', m.material)].filter(Boolean).join('.');
+  const fa = [abr('forma', m.forma), abr('aro', m.aro)].filter(Boolean).join('/');
+  const col = (m.colores || []).map(c => abr('color', c)).join('/');
+  return [gm, m.marcaAbr || abrMarca(m.marca), fa, col].filter(Boolean).join(' ');
+}
+const varillaDe = m => [m.varilla, m.colorCod].filter(Boolean).join(' ');
+const coloresDe = m => (m.colores || []).join(' / ') || m.color || '';
+const infoMontura = m => [[m.marca, m.modelo].filter(Boolean).join(' '), varillaDe(m) && 'varilla ' + varillaDe(m), coloresDe(m)].filter(Boolean).join(' · ');
+const descMontura = m => `Montura ${[m.marca, m.modelo, varillaDe(m)].filter(Boolean).join(' ')}${coloresDe(m) ? ' · ' + coloresDe(m) : ''} (${m.codigo})`;
+const chipStock = m => num(m.stock) <= 0 ? 'deuda' : num(m.stock) <= 1 ? 'pend' : 'plain';
+// "4321 C2" → varilla 4321, color de fábrica C2; si no son números se toma como marca.
+function varillaDeTexto(q) {
+  const r = /^(\d{3,6})\s*(?:[-/]?\s*c\s*(\d{1,3}))?$/i.exec(String(q || '').trim());
+  return r ? { varilla: r[1], colorCod: r[2] ? 'C' + r[2] : '' } : q ? { marca: q } : {};
+}
+function nuevoCodigo() {
+  const max = Math.max(0, ...db.monturas.map(x => +((/^M(\d+)$/i.exec(x.codigo) || [])[1] || 0)));
+  return 'M' + pad(Math.max(db.config.nextMontura || 1, max + 1), 5);
+}
+// Busca por N° de varilla (4321 o 4321 C2), código interno, marca, sigla, color, etc.
+function buscarMonturas(q) {
+  const toks = sinTilde(q).split(/\s+/).filter(Boolean), qa = alnum(q);
+  if (!toks.length) return db.monturas.slice();
+  return db.monturas.map(m => {
+    const vc = alnum(m.varilla + (m.colorCod || ''));
+    const texto = sinTilde([m.codigo, m.marca, m.modelo, siglaMontura(m), m.varilla, m.colorCod, m.genero, m.material, m.forma, m.aro, coloresDe(m)].join(' '));
+    const pts = alnum(m.codigo) === qa || (vc && vc === qa) ? 3 : vc && qa.length >= 3 && vc.startsWith(qa) ? 2 : toks.every(t => texto.includes(t)) ? 1 : 0;
+    return [m, pts];
+  }).filter(x => x[1]).sort((a, b) => b[1] - a[1] || a[0].codigo.localeCompare(b[0].codigo, 'es', { numeric: true })).map(x => x[0]);
+}
+// Misma marca y mismo código de varilla (o, sin varilla, misma descripción): es la misma montura.
+function monturaIgual(f, excepto) {
+  if (!f.marca) return null;
+  return db.monturas.find(x => x !== excepto && alnum(x.marca) === alnum(f.marca) && (f.varilla
+    ? alnum(x.varilla) === alnum(f.varilla) && alnum(x.colorCod) === alnum(f.colorCod)
+    : !x.varilla && alnum(x.modelo) === alnum(f.modelo) && siglaMontura(x) === siglaMontura(f)));
+}
+const filaMontura = m => `<span class="grow" style="min-width:0"><b class="sigla">${esc(siglaMontura(m))}</b><br><span class="muted small">${esc(infoMontura(m))} · ${esc(m.codigo)}</span></span>
+  <span style="text-align:right;white-space:nowrap"><b class="num">${money(m.precio)}</b><br><span class="chip ${chipStock(m)}">${m.stock} en stock</span></span>`;
+// Caja de búsqueda con resultados; Enter elige el primero.
+function buscadorMonturas(inp, res, onPick) {
+  let lista = [];
+  const pick = m => { inp.value = ''; res.hidden = true; lista = []; onPick(m); };
+  inp.oninput = () => {
+    const q = inp.value.trim(); if (!q) { res.hidden = true; lista = []; return; }
+    lista = buscarMonturas(q).slice(0, 12);
+    res.innerHTML = lista.map(m => `<a href="#" data-m="${m.id}">${filaMontura(m)}</a>`).join('') || `<div class="empty small">No hay monturas con “${esc(q)}”</div>`;
+    res.hidden = false;
+    $$('[data-m]', res).forEach(a => a.onclick = e => { e.preventDefault(); pick(db.monturas.find(x => x.id === a.dataset.m)); });
+  };
+  inp.onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); if (lista[0]) pick(lista[0]); }
+    if (e.key === 'Escape') res.hidden = true;
+  };
+  if (!res.classList.contains('static')) inp.onblur = () => setTimeout(() => { res.hidden = true; }, 200);
+}
+
 // ---------- Inventario ----------
 let invTab = 'monturas';
 routes.inventario = {
@@ -1302,16 +1384,16 @@ routes.inventario = {
     return `<div class="page-head"><div><h1>Inventario</h1><p>${db.monturas.length} monturas · ${db.monturas.reduce((s, m) => s + Math.max(0, num(m.stock)), 0)} unidades${bajo ? ` · <span style="color:var(--danger)">${bajo} con stock bajo</span>` : ''}</p></div>
       <div class="actions">${invTab === 'monturas' ? `<button class="btn accent" id="ingreso">${icon('box')} Llegó mercadería</button>` : ''}<button class="btn primary" id="newi">${icon('plus')} ${invTab === 'monturas' ? 'Nueva montura' : 'Nuevo cristal'}</button></div></div>
       <div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="iseg"><button data-k="monturas" class="${invTab === 'monturas' ? 'on' : ''}">Monturas</button><button data-k="cristales" class="${invTab === 'cristales' ? 'on' : ''}">Lista de precios de cristales</button></div>
-      <input class="inp" id="if" style="flex:1;min-width:200px" placeholder="Buscar…"></div><div id="ilist"></div></div>`;
+      <input class="inp" id="if" style="flex:1;min-width:200px" placeholder="${invTab === 'monturas' ? 'Buscar varilla, marca, sigla o código…' : 'Buscar…'}"></div><div id="ilist"></div></div>`;
   },
   bind() {
     const draw = () => {
-      const f = $('#if').value.trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+      const f = sinTilde($('#if').value.trim());
       if (invTab === 'monturas') {
-        const l = db.monturas.filter(m => !f || [m.codigo, m.marca, m.modelo, m.material, m.color].join(' ').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().includes(f)).sort((a, b) => a.codigo.localeCompare(b.codigo, 'es', { numeric: true }));
-        $('#ilist').innerHTML = l.length ? `<div class="tbl-wrap"><table><thead><tr><th>Código</th><th>Montura</th><th class="hide-sm">Material</th><th class="r">Precio</th><th class="c">Stock</th><th></th></tr></thead><tbody>
-          ${l.map(m => `<tr class="link" data-id="${m.id}"><td><span class="tag">${esc(m.codigo)}</span></td><td><b>${esc(m.marca)}</b> ${esc(m.modelo)}<div class="muted small">${esc(m.color || '')}</div></td><td class="hide-sm">${esc(m.material || '—')}</td><td class="r num">${money(m.precio)}</td>
-          <td class="c"><span class="chip ${num(m.stock) <= 0 ? 'deuda' : num(m.stock) <= 1 ? 'pend' : 'plain'}">${m.stock}</span></td><td class="r"><button class="btn sm" data-add="${m.id}" title="Sumar unidades">${icon('plus')}<span class="hide-sm">Stock</span></button></td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${icon('box')}<div>No hay monturas.</div></div>`;
+        const l = f ? buscarMonturas(f) : db.monturas.slice().sort((a, b) => a.codigo.localeCompare(b.codigo, 'es', { numeric: true }));
+        $('#ilist').innerHTML = l.length ? `<div class="tbl-wrap"><table><thead><tr><th class="hide-sm">Código</th><th>Montura</th><th class="r">Precio</th><th class="c">Stock</th><th></th></tr></thead><tbody>
+          ${l.map(m => `<tr class="link" data-id="${m.id}"><td class="hide-sm"><span class="tag">${esc(m.codigo)}</span></td><td><b class="sigla">${esc(siglaMontura(m))}</b><div class="muted small"><span class="show-sm">${esc(m.codigo)} · </span>${esc(infoMontura(m))}</div></td><td class="r num">${money(m.precio)}</td>
+          <td class="c"><span class="chip ${chipStock(m)}">${m.stock}</span></td><td class="r"><button class="btn sm" data-add="${m.id}" title="Sumar unidades">${icon('plus')}<span class="hide-sm">Stock</span></button></td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${icon('box')}<div>No hay monturas.</div></div>`;
         $$('#ilist [data-id]').forEach(r => r.onclick = e => { if (!e.target.closest('[data-add]')) monturaForm(db.monturas.find(x => x.id === r.dataset.id)); });
         $$('#ilist [data-add]').forEach(b => b.onclick = () => stockForm(db.monturas.find(x => x.id === b.dataset.add)));
       } else {
@@ -1327,22 +1409,20 @@ routes.inventario = {
     $('#ingreso') && ($('#ingreso').onclick = () => ingresoForm());
   },
 };
-// Llegó mercadería: se escribe el código; si ya existe se suman unidades, si no se registra nueva.
+// Llegó mercadería: se busca la montura; si ya existe se suman unidades, si no se registra nueva.
 function ingresoForm() {
   modal({
     title: 'Llegó mercadería',
-    body: `<form id="ing" class="form"><p class="muted small" style="margin:0">Escribe el código de la montura. Si ya está registrada solo se suman las unidades; si es nueva, la registras.</p>
-      <label class="f">Código de la montura<input class="inp" name="codigo" list="inglist" required autocomplete="off" placeholder="Ej. M-101"><datalist id="inglist">${db.monturas.map(m => `<option value="${esc(m.codigo)}">${esc(m.marca)} ${esc(m.modelo)} · stock ${m.stock}</option>`).join('')}</datalist></label>
-      <label class="f">¿Cuántas unidades llegaron?<input class="inp" name="cant" inputmode="numeric" value="1" required></label></form>`,
-    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="ing">Continuar</button>`,
+    body: `<div class="form"><p class="muted small" style="margin:0">Busca la montura por el N° de la varilla, la marca o el código. Si ya está registrada solo se suman las unidades; si es nueva, la registras.</p>
+      <label class="f">¿Cuántas unidades llegaron?<input class="inp" id="icant" inputmode="numeric" value="1"></label>
+      <div class="fld">Montura<div class="search" style="max-width:none">${icon('search')}<input id="iq" placeholder="Ej. 4321 C2 o Fellis" autocomplete="off"></div><div class="sr static" id="ires" hidden></div></div>
+      <button type="button" class="btn" id="inew">${icon('plus')} No está, es nueva</button></div>`,
+    foot: `<button class="btn" data-close>Cancelar</button>`,
     onMount: bg => {
-      $('#ing', bg).onsubmit = e => {
-        e.preventDefault();
-        const f = readForm(e.target), cant = Math.max(1, parseInt(f.cant, 10) || 1);
-        const m = db.monturas.find(x => x.codigo.toLowerCase() === f.codigo.trim().toLowerCase());
-        closeModal();
-        if (m) stockForm(m, cant); else monturaForm(null, { codigo: f.codigo.trim().toUpperCase(), stock: cant });
-      };
+      const cant = () => Math.max(1, parseInt($('#icant', bg).value, 10) || 1);
+      buscadorMonturas($('#iq', bg), $('#ires', bg), m => { closeModal(); stockForm(m, cant()); });
+      $('#inew', bg).onclick = () => { const q = $('#iq', bg).value; closeModal(); monturaForm(null, { stock: cant(), ...varillaDeTexto(q) }); };
+      $('#iq', bg).focus();
     },
   });
 }
@@ -1350,7 +1430,7 @@ function stockForm(m, cant = 1) {
   modal({
     title: 'Sumar unidades',
     body: `<form id="stf" class="form">
-      <div class="row"><span class="tag">${esc(m.codigo)}</span><div><b>${esc(m.marca)} ${esc(m.modelo)}</b><div class="muted small">${esc(m.color || '')} · ${money(m.precio)}</div></div></div>
+      <div class="row"><span class="tag">${esc(m.codigo)}</span><div><b class="sigla">${esc(siglaMontura(m))}</b><div class="muted small">${esc(infoMontura(m))} · ${money(m.precio)}</div></div></div>
       <div class="row between"><span class="muted">Stock actual</span><b class="num" style="font-size:20px">${m.stock}</b></div>
       <label class="f">Unidades que llegaron<input class="inp" name="cant" inputmode="numeric" value="${cant}" required></label>
       <label class="f">Costo por unidad <span class="hint">(opcional)</span><input class="inp" name="costo" inputmode="decimal" value="${esc(m.costo || '')}"></label>
@@ -1371,29 +1451,106 @@ function stockForm(m, cant = 1) {
   });
 }
 function monturaForm(m, pre) {
-  const e = m || { stock: 1, ...(pre || {}) };
+  const e = m ? { ...m } : { stock: 1, codigo: nuevoCodigo(), ...(pre || {}) };
+  const sel = { genero: e.genero || '', material: e.material || '', forma: e.forma || '', aro: e.aro || '', colores: [...(e.colores || [])] };
+  if (!e.marcaAbr && e.marca) e.marcaAbr = abrMarcaUsada(e.marca);
+  let abrManual = !!(e.marcaAbr && e.marcaAbr !== abrMarcaUsada(e.marca));
+  const marcas = [...new Set(db.monturas.map(x => x.marca).filter(Boolean))].sort();
   modal({
-    title: m ? 'Montura ' + esc(m.codigo) : 'Nueva montura',
-    body: `<form id="mf" class="form"><div class="fg">
-      <label class="f">Código<input class="inp" name="codigo" required value="${esc(e.codigo)}"></label><label class="f">Marca<input class="inp" name="marca" required value="${esc(e.marca)}"></label>
-      <label class="f">Modelo<input class="inp" name="modelo" value="${esc(e.modelo)}"></label><label class="f">Color<input class="inp" name="color" value="${esc(e.color)}"></label>
-      <label class="f">Material<select class="inp" name="material">${['', 'Metal', 'Acetato', 'TR90', 'Titanio', 'Aire / al aire', 'Otro'].map(x => `<option ${x === (e.material || '') ? 'selected' : ''}>${x}</option>`).join('')}</select></label>
-      <label class="f">Precio de venta<input class="inp" name="precio" inputmode="decimal" required value="${esc(e.precio)}"></label>
-      <label class="f">Costo <span class="hint">(opcional)</span><input class="inp" name="costo" inputmode="decimal" value="${esc(e.costo)}"></label>
-      <label class="f">Stock<input class="inp" name="stock" inputmode="numeric" value="${esc(e.stock)}"></label></div>
+    title: m ? 'Montura ' + esc(m.codigo) : 'Nueva montura', wide: true,
+    body: `<form id="mf" class="form">
+      <div class="sigla-box"><span class="small">Así queda</span><b class="sigla" id="msig"></b></div>
+      <div class="fg"><label class="f">Marca<input class="inp" name="marca" list="mmarcas" required autocomplete="off" value="${esc(e.marca)}" placeholder="Ej. Fellis"><datalist id="mmarcas">${marcas.map(x => `<option value="${esc(x)}">`).join('')}</datalist></label>
+        <label class="f">Sigla de la marca <span class="hint">(se pone sola, puedes cambiarla)</span><input class="inp up" name="marcaAbr" maxlength="6" autocomplete="off" value="${esc(e.marcaAbr)}"></label></div>
+      ${ABREV_GRUPOS.map(([g, t]) => `<div class="fld">${t}${g === 'color' ? ' <span class="hint">(en el orden en que los tocas)</span>' : ''}<div class="pick" data-g="${g}"></div></div>`).join('')}
+      <div class="fg"><label class="f">N° en la varilla <span class="hint">(opcional)</span><input class="inp up" name="varilla" autocomplete="off" value="${esc(e.varilla)}" placeholder="Ej. 4321"></label>
+        <label class="f">Color de fábrica <span class="hint">(opcional)</span><input class="inp up" name="colorCod" autocomplete="off" value="${esc(e.colorCod)}" placeholder="C1, C2, C3…"></label></div>
+      <div id="mdup"></div>
+      <div class="fg fg3"><label class="f">Modelo o nombre <span class="hint">(opcional)</span><input class="inp" name="modelo" value="${esc(e.modelo)}"></label>
+        <label class="f">Código interno<input class="inp up" name="codigo" required value="${esc(e.codigo)}"></label>
+        <label class="f">Precio de venta<input class="inp" name="precio" inputmode="decimal" required value="${esc(e.precio)}"></label>
+        <label class="f">Costo <span class="hint">(opcional)</span><input class="inp" name="costo" inputmode="decimal" value="${esc(e.costo)}"></label>
+        <label class="f">Stock<input class="inp" name="stock" inputmode="numeric" value="${esc(e.stock)}"></label></div>
       ${m ? `<p class="hint" style="margin:0">${icon('lock', '').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"')} Cambiar el precio pide la clave de los dos socios.</p>` : ''}</form>`,
     foot: `${m ? `<button class="btn danger" id="mdel" style="margin-right:auto">${icon('trash')}</button>` : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" form="mf">Guardar</button>`,
     onMount: bg => {
-      $('#mf', bg).onsubmit = ev => {
+      const form = $('#mf', bg), campo = n => form.elements[n];
+      const estado = () => {
+        const f = readForm(form);
+        let v = f.varilla.toUpperCase().replace(/\s+/g, ''), c = f.colorCod.toUpperCase().replace(/\s+/g, '');
+        const vc = /^(\d+)[-/]?(C\d+)$/.exec(v); if (vc && !c) [, v, c] = vc; // escribieron "4321 C2" junto
+        if (/^\d+$/.test(c)) c = 'C' + c;
+        return { ...f, ...sel, colores: [...sel.colores], marcaAbr: (f.marcaAbr || abrMarca(f.marca)).toUpperCase(), varilla: v, colorCod: c };
+      };
+      const actualizar = () => {
+        const f = estado();
+        $('#msig', bg).textContent = siglaMontura(f) || '—';
+        const d = (f.varilla || (f.genero && f.colores.length)) && monturaIgual(f, m);
+        $('#mdup', bg).innerHTML = d ? `<div class="lock-note" style="margin:0;align-items:center">${icon('box')}<div class="grow"><b>${m ? 'Ya hay otra montura igual' : 'Esta montura ya está registrada'}</b><br><span class="sigla">${esc(siglaMontura(d))}</span> · ${esc(d.codigo)} · ${d.stock} en stock</div>${m ? '' : `<button type="button" class="btn sm primary" id="mdupadd">Sumar al stock</button>`}</div>` : '';
+        $('#mdupadd', bg) && ($('#mdupadd', bg).onclick = () => { closeModal(); stockForm(d, Math.max(1, num(campo('stock').value) || 1)); });
+      };
+      const pintar = () => {
+        ABREV_GRUPOS.forEach(([g]) => {
+          const act = g === 'color' ? sel.colores : [sel[g]].filter(Boolean);
+          const opts = abrev()[g].map(x => x[0]);
+          act.forEach(v => { if (!opts.some(o => sinTilde(o) === sinTilde(v))) opts.push(v); });
+          $(`[data-g="${g}"]`, bg).innerHTML = opts.map(v => {
+            const i = act.findIndex(a => sinTilde(a) === sinTilde(v));
+            return `<button type="button" data-v="${esc(v)}" class="${i >= 0 ? 'on' : ''}">${g === 'color' && i >= 0 && act.length > 1 ? `<i>${i + 1}</i>` : ''}${esc(v)} <small>${esc(abr(g, v))}</small></button>`;
+          }).join('') + (g === 'color' ? `<input class="inp sm" id="mcolx" placeholder="Otro color + Enter" style="width:170px">` : '');
+        });
+        actualizar();
+      };
+      form.addEventListener('click', ev => {
+        const b = ev.target.closest('.pick button'); if (!b) return;
+        const g = b.parentNode.dataset.g, v = b.dataset.v;
+        if (g === 'color') { const i = sel.colores.findIndex(a => sinTilde(a) === sinTilde(v)); i >= 0 ? sel.colores.splice(i, 1) : sel.colores.push(v); }
+        else sel[g] = sinTilde(sel[g]) === sinTilde(v) ? '' : v;
+        pintar();
+      });
+      form.addEventListener('keydown', ev => {
+        if (ev.target.id !== 'mcolx' || ev.key !== 'Enter') return;
         ev.preventDefault();
-        const f = readForm(ev.target); f.precio = num(f.precio); f.stock = num(f.stock); f.costo = f.costo ? num(f.costo) : '';
-        const dup = db.monturas.find(x => x !== m && x.codigo.toLowerCase() === f.codigo.toLowerCase());
-        if (dup && !m) { closeModal(); stockForm(dup, f.stock || 1); return; }
-        if (dup) { toast('Ya existe otra montura con ese código'); return; }
-        const doit = () => { if (m) Object.assign(m, f); else db.monturas.push({ id: uid(), ...f }); save(); closeModal(); toast('Montura guardada'); render(); };
-        m && num(m.precio) !== f.precio ? dual(`Cambiar precio de montura ${m.codigo}: ${money(m.precio)} → ${money(f.precio)}`, doit) : doit();
+        const v = ev.target.value.trim(); if (!v) return;
+        const t = abrev().color.find(([n]) => sinTilde(n) === sinTilde(v));
+        if (!sel.colores.some(a => sinTilde(a) === sinTilde(v))) sel.colores.push(t ? t[0] : v.charAt(0).toUpperCase() + v.slice(1));
+        pintar(); $('#mcolx', bg).focus();
+      });
+      campo('marca').oninput = () => { if (!abrManual) campo('marcaAbr').value = abrMarcaUsada(campo('marca').value); actualizar(); };
+      campo('marcaAbr').oninput = () => { abrManual = !!campo('marcaAbr').value.trim(); actualizar(); };
+      ['varilla', 'colorCod', 'modelo'].forEach(n => campo(n).oninput = actualizar);
+      pintar();
+      form.onsubmit = ev => {
+        ev.preventDefault();
+        const f = estado(); f.precio = num(f.precio); f.stock = num(f.stock); f.costo = f.costo ? num(f.costo) : '';
+        f.codigo = f.codigo.toUpperCase(); f.color = f.colores.join(' / ');
+        const cod = db.monturas.find(x => x !== m && x.codigo.toLowerCase() === f.codigo.toLowerCase());
+        if (cod && m) { toast('Ya existe otra montura con ese código'); return; }
+        const registrar = () => {
+          if (cod) f.codigo = nuevoCodigo();
+          if (m) Object.assign(m, f); else db.monturas.push({ id: uid(), ...f });
+          const n = /^M(\d+)$/.exec(f.codigo); if (n) db.config.nextMontura = Math.max(db.config.nextMontura || 1, +n[1] + 1);
+          save(); closeModal(); toast(`Montura ${f.codigo} guardada`); render();
+        };
+        const igual = !m && (cod || monturaIgual(f));
+        if (igual) return yaRegistrada(igual, Math.max(1, f.stock || 1), registrar);
+        m && num(m.precio) !== f.precio ? dual(`Cambiar precio de montura ${m.codigo}: ${money(m.precio)} → ${money(f.precio)}`, registrar) : registrar();
       };
       $('#mdel', bg) && ($('#mdel', bg).onclick = () => dual(`Eliminar montura ${m.codigo}`, () => { db.monturas = db.monturas.filter(x => x !== m); save(); render(); }));
+    },
+  });
+}
+// Al registrar una montura que ya existe se ofrece sumar al stock en lugar de duplicarla.
+function yaRegistrada(d, cant, registrarAparte) {
+  modal({
+    title: 'Esta montura ya está registrada',
+    body: `<div class="form"><div class="row"><span class="tag">${esc(d.codigo)}</span><div><b class="sigla">${esc(siglaMontura(d))}</b><div class="muted small">${esc(infoMontura(d))} · ${money(d.precio)}</div></div></div>
+      <div class="row between"><span class="muted">Stock actual</span><b class="num" style="font-size:20px">${d.stock}</b></div>
+      <p class="muted small" style="margin:0">¿Quieres sumarle ${cant} ${cant === 1 ? 'unidad' : 'unidades'}? Si en verdad es otra montura, regístrala aparte.</p></div>`,
+    foot: `<button class="btn" id="yaparte">Registrar aparte</button><button class="btn primary" id="ysumar">${icon('plus')} Sumar al stock</button>`,
+    onMount: bg => {
+      $('#ysumar', bg).onclick = () => stockForm(d, cant);
+      $('#yaparte', bg).onclick = registrarAparte;
     },
   });
 }
@@ -1499,6 +1656,10 @@ routes.ajustes = {
           <p class="hint" style="margin:0">Para que la boleta o factura tenga validez ante SUNAT debe emitirse también como comprobante electrónico (SUNAT Operaciones en Línea o un proveedor autorizado).</p>
           <div class="actions"><button class="btn primary">Guardar</button><button type="button" class="btn" id="cptest">${icon('file')} Ver PDF de prueba</button></div>
         </form></div></div>
+        <div class="card" style="grid-column:1/-1"><div class="card-h"><div><h3>Siglas del inventario</h3><div class="sub">Con estas letras se arma la descripción de cada montura, por ejemplo D.M FELL CU/C VER/RO.</div></div></div><div class="card-b"><form id="abf" class="form">
+          ${ABREV_GRUPOS.map(([g, t]) => `<div class="fld">${t}<div class="abl" data-g="${g}">${abrev()[g].map(([n, a]) => filaAbrev(n, a)).join('')}</div><div><button type="button" class="btn sm ghost" data-addab="${g}">${icon('plus')} Agregar</button></div></div>`).join('')}
+          <p class="hint" style="margin:0">Si cambias una sigla, se actualiza en todas las monturas. Si cambias un nombre, las monturas que ya tenían el nombre anterior lo conservan.</p>
+          <div class="actions"><button class="btn primary">Guardar siglas</button><button type="button" class="btn ghost" id="abreset">Volver a las siglas iniciales</button></div></form></div></div>
         <div class="card"><div class="card-h"><h3>Socios</h3></div><div class="card-b">
           ${c.socios.map(s => `<div class="row between" style="padding:10px 0;border-bottom:1px solid var(--line-2)"><div class="row"><span class="avatar">${initials(s.nombre)}</span><div><b>${esc(s.nombre)}</b><div class="muted small">${s.pct}% de la ganancia</div></div></div><button class="btn sm" data-s="${s.id}">Editar</button></div>`).join('')}
           <p class="hint">Cambiar nombres, porcentajes o claves pide la clave de ambos socios.</p></div></div>
@@ -1526,6 +1687,18 @@ routes.ajustes = {
       });
       save(); toast('Datos de comprobantes guardados'); render();
     };
+    $$('[data-addab]').forEach(b => b.onclick = () => { $(`.abl[data-g="${b.dataset.addab}"]`).insertAdjacentHTML('beforeend', filaAbrev('', '')); $(`.abl[data-g="${b.dataset.addab}"] .abr:last-child input`).focus(); });
+    $('#abf').addEventListener('click', e => { const x = e.target.closest('[data-delab]'); if (x) x.closest('.abr').remove(); });
+    $('#abf').onsubmit = e => {
+      e.preventDefault();
+      const ab = {};
+      ABREV_GRUPOS.forEach(([g]) => {
+        ab[g] = $$(`.abl[data-g="${g}"] .abr`).map(r => [$('[data-n]', r).value.trim(), $('[data-a]', r).value.trim().toUpperCase()])
+          .filter(([n]) => n).map(([n, a]) => [n, a || alnum(n).slice(0, 3).toUpperCase()]);
+      });
+      db.config.abrev = ab; save(); toast('Siglas guardadas'); render();
+    };
+    $('#abreset').onclick = () => confirmBox('¿Volver a las siglas iniciales? Se pierden los cambios que hiciste en esta tabla.', () => { db.config.abrev = ABREV_DEF(); save(); toast('Siglas restablecidas'); render(); }, 'Restablecer');
     $('#logoin').onchange = e => { const file = e.target.files[0]; if (file) logoDesdeArchivo(file, (url, ratio) => { Object.assign(fact(), { logo: url, logoRatio: ratio }); save(); toast('Logo guardado'); render(); }); };
     $('#logodel') && ($('#logodel').onclick = () => { fact().logo = ''; save(); render(); });
     $('#cptest').onclick = async () => {
@@ -1542,7 +1715,7 @@ routes.ajustes = {
       if (ok) { db.config.ultimoRespaldo = Date.now(); save(); render(); }
     };
     $('#reset').onclick = () => dual('Borrar pacientes, órdenes, caja e inventario (se conservan los socios y los datos de la óptica)', () => {
-      const cfg = { ...db.config, nextOrden: 1, fact: { ...db.config.fact, numB: 1, numF: 1 } }; db = blank(); db.config = cfg; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
+      const cfg = { ...db.config, nextOrden: 1, nextMontura: 1, fact: { ...db.config.fact, numB: 1, numF: 1 } }; db = blank(); db.config = cfg; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
     });
     $('#imp').onchange = e => {
       const file = e.target.files[0]; if (!file) return;
@@ -1553,6 +1726,7 @@ routes.ajustes = {
     };
   },
 };
+const filaAbrev = (n, a) => `<div class="abr"><input class="inp sm" data-n value="${esc(n)}" placeholder="Nombre" aria-label="Nombre"><input class="inp sm up" data-a value="${esc(a)}" placeholder="Sigla" maxlength="5" aria-label="Sigla"><button type="button" class="btn ghost icon sm" data-delab aria-label="Quitar">${icon('x')}</button></div>`;
 function socioForm(s) {
   modal({
     title: 'Editar socio',
@@ -1574,10 +1748,21 @@ function socioForm(s) {
 // ---------- Datos de ejemplo ----------
 function seedDemo() {
   const d = hoy(), S = db.config.socios;
-  const mont = [['M-101', 'Ray-Ban', 'RB5154 Clubmaster', 'Acetato', 'Carey', 380, 3], ['M-102', 'Ray-Ban', 'RB3447 Round', 'Metal', 'Dorado', 420, 2], ['M-201', 'Vogue', 'VO5286', 'Acetato', 'Negro', 290, 4],
-    ['M-202', 'Oakley', 'OX8046 Airdrop', 'TR90', 'Gris mate', 450, 1], ['M-301', 'Genérica', 'GL-22', 'Metal', 'Plateado', 120, 12], ['M-302', 'Genérica', 'GL-35 Kids', 'TR90', 'Azul', 95, 8],
-    ['M-401', 'Guess', 'GU2700', 'Metal', 'Rosa', 340, 2], ['M-402', 'Carolina Herrera', 'VHE836', 'Acetato', 'Havana', 520, 1], ['M-501', 'Genérica', 'Al aire A1', 'Aire / al aire', 'Plateado', 160, 6]];
-  db.monturas = mont.map(([codigo, marca, modelo, material, color, precio, stock]) => ({ id: uid(), codigo, marca, modelo, material, color, precio, stock }));
+  const mont = [
+    ['Ray-Ban', 'RB', 'Clubmaster', 'Unisex', 'Pasta', 'Cuadrada', 'Semi al aire', ['Carey', 'Dorado'], '5154', 'C2', 380, 3],
+    ['Ray-Ban', 'RB', 'Round', 'Unisex', 'Metal', 'Redonda', 'Completa', ['Dorado'], '3447', 'C1', 420, 2],
+    ['Vogue', 'VOG', '', 'Dama', 'Pasta', 'Cat eye', 'Completa', ['Negro'], '5286', 'C1', 290, 4],
+    ['Oakley', 'OAK', 'Airdrop', 'Caballero', 'TR90', 'Rectangular', 'Completa', ['Gris'], '8046', 'C3', 450, 1],
+    ['Fellis', 'FELL', '', 'Dama', 'Metal', 'Cuadrada', 'Completa', ['Verde', 'Rosa'], '4321', 'C2', 180, 2],
+    ['Genérica', 'GEN', 'Kids', 'Niño', 'TR90', 'Rectangular', 'Completa', ['Azul'], '', '', 95, 8],
+    ['Fellis', 'FELL', '', 'Dama', 'Metal', 'Cuadrada', 'Completa', ['Negro', 'Dorado'], '4321', 'C1', 180, 3],
+    ['Carolina Herrera', 'CH', '', 'Dama', 'Pasta', 'Cuadrada', 'Completa', ['Carey'], '836', 'C2', 520, 1],
+    ['Vanci', 'VAN', '', 'Caballero', 'Metal', 'Redonda', 'Semi al aire', ['Dorado'], '7788', 'C1', 220, 2],
+    ['Genérica', 'GEN', '', 'Unisex', 'Titanio', 'Rectangular', 'Al aire', ['Plateado'], '', '', 160, 6],
+  ];
+  db.monturas = mont.map(([marca, marcaAbr, modelo, genero, material, forma, aro, colores, varilla, colorCod, precio, stock], i) =>
+    ({ id: uid(), codigo: 'M' + pad(i + 1, 5), marca, marcaAbr, modelo, genero, material, forma, aro, colores, color: colores.join(' / '), varilla, colorCod, precio, stock }));
+  db.config.nextMontura = mont.length + 1;
   const cr = [['Monofocal CR-39 blanco', 'Monofocal', 80], ['Monofocal CR-39 antirreflejo', 'Monofocal', 150], ['Monofocal blue cut antirreflejo', 'Monofocal', 220], ['Monofocal fotocromático', 'Monofocal', 280],
     ['Bifocal flat-top antirreflejo', 'Bifocal', 260], ['Progresivo digital antirreflejo', 'Multifocal / Progresivo', 650], ['Progresivo blue cut premium', 'Multifocal / Progresivo', 890], ['Policarbonato antirreflejo (niños)', 'Monofocal', 240]];
   db.cristales = cr.map(([nombre, tipo, precio]) => ({ id: uid(), nombre, tipo, precio }));
@@ -1601,7 +1786,7 @@ function seedDemo() {
     pagos.forEach(([f, monto, metodo, tipo], k) => db.pagos.push({ id: uid(), ordenId: o.id, fecha: f, monto, metodo, por: o.por, ts: Date.now() + k + db.pagos.length, tipo }));
     return o;
   };
-  const it = (mi, ci) => [{ tipo: 'montura', ref: db.monturas[mi].id, desc: `Montura ${db.monturas[mi].codigo} · ${db.monturas[mi].marca} ${db.monturas[mi].modelo}`, cant: 1, precio: db.monturas[mi].precio },
+  const it = (mi, ci) => [{ tipo: 'montura', ref: db.monturas[mi].id, desc: descMontura(db.monturas[mi]), cant: 1, precio: db.monturas[mi].precio },
     { tipo: 'cristal', ref: db.cristales[ci].id, desc: 'Cristales ' + db.cristales[ci].nombre, cant: 1, precio: db.cristales[ci].precio }];
   mk(2, addDays(d, -420), it(4, 1), 'entregado', [[addDays(d, -420), 270, 'Efectivo', 'abono']], addDays(d, -417));
   mk(4, addDays(d, -390), it(7, 5), 'entregado', [[addDays(d, -390), 600, 'Tarjeta', 'abono'], [addDays(d, -385), 570, 'Efectivo', 'saldo']], addDays(d, -385));
@@ -1617,7 +1802,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.23.3';
+const APP_VERSION = '2026.09.23.4';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
