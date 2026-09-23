@@ -109,6 +109,17 @@ function normDb(d) {
   d.comprobantes = d.comprobantes || [];
   return d;
 }
+// La primera vez pone el logo de la óptica en los comprobantes; luego se puede cambiar en Ajustes.
+async function logoInicial() {
+  const F = db && db.config.fact;
+  if (!F || F.logo || F.logoAuto) return;
+  try {
+    const bl = await (await fetch('logo-glooptic.png')).blob();
+    const url = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(bl); });
+    const im = new Image(); im.src = url; await im.decode();
+    Object.assign(F, { logo: url, logoRatio: im.width / im.height, logoAuto: true }); save();
+  } catch (e) { }
+}
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('No se pudo guardar: ' + e.message); }
 }
@@ -235,7 +246,7 @@ function shell(key, content) {
   const u = me();
   return `<div class="app">
     <aside class="side">
-      <div class="brand"><div class="logo">${icon('eye')}</div><div><b>${esc(db.config.nombre || 'Mi Óptica')}</b><small>Sistema de gestión</small></div></div>
+      <div class="brand"><div class="logo"><img src="logo-mark.png" alt=""></div><div><b>${esc(db.config.nombre || 'Mi Óptica')}</b><small>Sistema de gestión</small></div></div>
       <nav class="nav">${nav.map(([k, t, i]) => `<a href="#/${k}" class="${active(k)}">${icon(i)}<span>${t}</span>${badge(k)}</a>`).join('')}</nav>
       <div class="me"><div class="avatar">${initials(u.nombre)}</div><div><b>${esc(u.nombre)}</b><small>Socio</small></div><button id="logout" title="Cambiar de usuario">${icon('logout')}</button></div>
     </aside>
@@ -289,7 +300,7 @@ const deudaChip = o => { const s = saldoOrden(o); return s > 0.009 ? `<span clas
 // ---------- Primera configuración ----------
 function setupView() {
   return `<div class="login"><div class="box wide">
-    <div class="logo">${icon('eye')}</div>
+    <div class="logo"><img src="logo-mark.png" alt=""></div>
     <h1>Bienvenido</h1><p class="muted" style="margin:6px 0 20px">Configuremos la óptica. Solo toma un minuto.</p>
     <form id="setup" class="form">
       <div class="fg"><label class="f full">Nombre de la óptica<input class="inp" name="nombre" required value="Glooptic"></label>
@@ -310,7 +321,7 @@ function bindSetup() {
     Object.assign(db.config.fact, { ruc: f.ruc, direccion: f.direccion });
     db.config.socios = [{ id: 's1', nombre: f.s1, pin: hashPin(f.p1), pct: 50 }, { id: 's2', nombre: f.s2, pin: hashPin(f.p2), pct: 50 }];
     if (f.demo) seedDemo();
-    save(); render();
+    save(); render(); logoInicial();
   };
 }
 
@@ -320,7 +331,7 @@ function loginView() {
   const ss = db.config.socios;
   loginSel = loginSel || ss[0]?.id;
   return `<div class="login"><div class="box">
-    <div class="logo">${icon('eye')}</div>
+    <div class="logo"><img src="logo-mark.png" alt=""></div>
     <h1>${esc(db.config.nombre || 'Mi Óptica')}</h1><p class="muted" style="margin:6px 0 0">¿Quién ingresa?</p>
     <div class="who">${ss.map(s => `<button type="button" data-u="${s.id}" class="${s.id === loginSel ? 'on' : ''}"><span class="avatar">${initials(s.nombre)}</span>${esc(s.nombre)}</button>`).join('')}</div>
     <form id="login" class="form"><input class="inp pin" id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Clave" maxlength="8">
@@ -549,6 +560,7 @@ function medidaTexto(m, p) {
     + (dx.length ? `\n*¿Qué significa?*\n${dx.map(d => `• *${d[0]}:* ${d[1]}`).join('\n')}\n` : '')
     + `${m.lente ? `\nLente recomendado: ${m.lente}${m.filtros ? ' (' + m.filtros + ')' : ''}.\n` : ''}\nTe recomendamos un control cada ${db.config.recordatorioMeses} meses. ¡Gracias por tu confianza!`;
 }
+const LOGO_IMG = new Image(); LOGO_IMG.src = 'logo-mark.png';
 function medidaImagen(m, p) {
   const W = 1080, H = 1350, c = document.createElement('canvas'); c.width = W; c.height = H;
   const x = c.getContext('2d');
@@ -556,8 +568,11 @@ function medidaImagen(m, p) {
   x.fillStyle = '#f5f3ee'; x.fillRect(0, 0, W, H);
   x.fillStyle = '#14263f'; x.fillRect(0, 0, W, 300);
   const g = x.createLinearGradient(80, 80, 180, 180); g.addColorStop(0, '#2aa39c'); g.addColorStop(1, '#1c6f8c');
-  x.fillStyle = g; roundRect(x, 80, 80, 96, 96, 26); x.fill();
-  x.strokeStyle = '#fff'; x.lineWidth = 6; x.beginPath(); x.ellipse(128, 128, 30, 18, 0, 0, Math.PI * 2); x.stroke(); x.beginPath(); x.arc(128, 128, 8, 0, Math.PI * 2); x.stroke();
+  if (LOGO_IMG.complete && LOGO_IMG.naturalWidth) { x.save(); roundRect(x, 80, 80, 96, 96, 26); x.clip(); x.drawImage(LOGO_IMG, 80, 80, 96, 96); x.restore(); }
+  else {
+    x.fillStyle = g; roundRect(x, 80, 80, 96, 96, 26); x.fill();
+    x.strokeStyle = '#fff'; x.lineWidth = 6; x.beginPath(); x.ellipse(128, 128, 30, 18, 0, 0, Math.PI * 2); x.stroke(); x.beginPath(); x.arc(128, 128, 8, 0, Math.PI * 2); x.stroke();
+  }
   x.fillStyle = '#fff'; x.font = `600 52px ${serif}`; x.fillText(db.config.nombre || 'Óptica', 206, 128);
   x.fillStyle = '#9fb0c6'; x.font = `400 28px ${sans}`; x.fillText([db.config.telefono, db.config.direccion].filter(Boolean).join('  ·  ') || 'Examen visual', 206, 170);
   x.fillStyle = '#fff'; x.font = `500 30px ${sans}`; x.fillText('Resultado de examen visual', 80, 250);
@@ -951,17 +966,23 @@ function comprobanteView(c) {
       </div>
       ${c.tipo !== 'nota' ? `<p class="hint" style="margin:12px 0 0">Recuerda: para que sea válido ante SUNAT emítelo también como comprobante electrónico con la misma serie y número.</p>` : ''}`,
     foot: `${c.estado !== 'anulado' ? `<button class="btn danger" id="cpanul" style="margin-right:auto">${icon('trash')} Anular</button>` : ''}
-      ${p?.telefono && !canShareFiles ? `<a class="btn wa" target="_blank" rel="noopener" href="${waLink(p.telefono, waTxt)}">${icon('wa')} WhatsApp</a>` : ''}
-      ${canShareFiles ? `<button class="btn wa" id="cpshare">${icon('wa')} Compartir PDF</button>` : ''}
-      <button class="btn primary" id="cpdl">${icon('down')} Descargar PDF</button>`,
+      <button class="btn" id="cpdl">${icon('down')} Descargar</button>
+      <button class="btn wa" id="cpshare">${icon('wa')} Compartir por WhatsApp</button>`,
     onMount: bg => {
       const make = async () => { try { return await comprobantePDF(c); } catch (e) { toast('No se pudo generar el PDF: ' + e.message); return null; } };
       $('#cpdl', bg).onclick = async () => { const b = await make(); if (b) saveFile(name, b); };
-      $('#cpshare', bg) && ($('#cpshare', bg).onclick = async () => {
+      // En el celular abre "Compartir" con el PDF: se elige WhatsApp y el chat del cliente.
+      // En la computadora descarga el PDF y abre WhatsApp Web para adjuntarlo.
+      $('#cpshare', bg).onclick = async () => {
         const b = await make(); if (!b) return;
-        try { await navigator.share({ files: [new File([b], name, { type: 'application/pdf' })], text: waTxt }); }
-        catch (e) { if (e.name !== 'AbortError') saveFile(name, b); }
-      });
+        const file = new File([b], name, { type: 'application/pdf' });
+        if (canShareFiles && navigator.canShare({ files: [file] })) {
+          try { await navigator.share({ files: [file] }); return; } catch (e) { if (e.name === 'AbortError') return; }
+        }
+        await saveFile(name, b);
+        window.open('https://web.whatsapp.com/', '_blank');
+        toast('PDF descargado: adjúntalo en el chat del cliente');
+      };
       $('#cpanul', bg) && ($('#cpanul', bg).onclick = () => dual(`Anular ${TIPOS_CP[c.tipo].toLowerCase()} ${cpNum(c)} de ${money(c.total)}`, () => {
         c.estado = 'anulado'; c.anulado = hoy(); save(); toast('Comprobante anulado'); render();
       }));
@@ -1014,12 +1035,20 @@ function emisorLineas(F) {
 function drawA4(doc, c, F) {
   const M = 14, W = 210, R = W - M, k = cpCalc(c), fa = c.tipo === 'factura';
   let y = 14, tx = M;
-  if (F.logo) {
-    const r = F.logoRatio || 1, lw = r >= 1.6 ? 38 : 26, lh = Math.min(26, lw / r);
-    try { doc.addImage(F.logo, 'PNG', M, y, lh * r, lh, 'logo', 'FAST'); tx = M + lh * r + 5; } catch (e) { }
-  }
-  pdfText(doc, db.config.nombre || F.razon, tx, y + 6, { b: 1, s: 16 });
   let ey = y + 12;
+  const ancho = F.logo && (F.logoRatio || 1) >= 2.2;
+  if (F.logo && ancho) {
+    // logo horizontal (ya trae el nombre): va arriba y los datos debajo
+    const lw = 70, lh = lw / F.logoRatio;
+    try { doc.addImage(F.logo, 'PNG', M, y - 2, lw, lh, 'logo', 'FAST'); } catch (e) { }
+    ey = y + lh + 3;
+  } else {
+    if (F.logo) {
+      const r = F.logoRatio || 1, lh = Math.min(26, 26 / r);
+      try { doc.addImage(F.logo, 'PNG', M, y, lh * r, lh, 'logo', 'FAST'); tx = M + lh * r + 5; } catch (e) { }
+    }
+    pdfText(doc, db.config.nombre || F.razon, tx, y + 6, { b: 1, s: 16 });
+  }
   emisorLineas(F).forEach(l => doc.splitTextToSize(l, 128 - tx).forEach(s => { pdfText(doc, s, tx, ey, { s: 8.5, c: PDF_GRAY }); ey += 4.2; }));
   // recuadro de RUC y número
   const bx = 134, bw = R - bx;
@@ -1100,8 +1129,9 @@ function drawTicket(doc, c, F) {
   const center = (t, o = {}) => doc.splitTextToSize(String(t), W - 2 * M).forEach(s => { pdfText(doc, s, X, y, { ...o, a: 'center' }); y += (o.s || 7.5) * 0.45; });
   const sep = () => { y += 1; doc.setLineDashPattern([0.8, 0.8], 0); doc.setDrawColor(150, 150, 150); doc.line(M, y, R, y); doc.setLineDashPattern([], 0); y += 4; };
   const fila = (l, v, o = {}) => { o = { s: 7.5, ...o }; pdfText(doc, l, M, y, o); pdfText(doc, v, R, y, { ...o, a: 'right' }); y += o.s * 0.48; };
-  if (F.logo) { const r = F.logoRatio || 1, h = Math.min(16, 30 / r); try { doc.addImage(F.logo, 'PNG', X - h * r / 2, y, h * r, h, 'logo', 'FAST'); y += h + 4; } catch (e) { } }
-  center(db.config.nombre || F.razon, { b: 1, s: 11 }); y += 0.5;
+  const r = F.logoRatio || 1, ancho = F.logo && r >= 2.2;
+  if (F.logo) { const w = ancho ? 62 : Math.min(30, 16 * r), h = w / r; try { doc.addImage(F.logo, 'PNG', X - w / 2, y, w, h, 'logo', 'FAST'); y += h + 4; } catch (e) { } }
+  if (!ancho) { center(db.config.nombre || F.razon, { b: 1, s: 11 }); y += 0.5; }
   emisorLineas(F).forEach(l => center(l, { s: 7.5, c: PDF_GRAY }));
   if (F.ruc) center('R.U.C. ' + F.ruc, { b: 1, s: 8.5 });
   sep();
@@ -1270,7 +1300,7 @@ routes.inventario = {
   html() {
     const bajo = db.monturas.filter(m => num(m.stock) <= 1).length;
     return `<div class="page-head"><div><h1>Inventario</h1><p>${db.monturas.length} monturas · ${db.monturas.reduce((s, m) => s + Math.max(0, num(m.stock)), 0)} unidades${bajo ? ` · <span style="color:var(--danger)">${bajo} con stock bajo</span>` : ''}</p></div>
-      <div class="actions"><button class="btn primary" id="newi">${icon('plus')} ${invTab === 'monturas' ? 'Nueva montura' : 'Nuevo cristal'}</button></div></div>
+      <div class="actions">${invTab === 'monturas' ? `<button class="btn accent" id="ingreso">${icon('box')} Llegó mercadería</button>` : ''}<button class="btn primary" id="newi">${icon('plus')} ${invTab === 'monturas' ? 'Nueva montura' : 'Nuevo cristal'}</button></div></div>
       <div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="iseg"><button data-k="monturas" class="${invTab === 'monturas' ? 'on' : ''}">Monturas</button><button data-k="cristales" class="${invTab === 'cristales' ? 'on' : ''}">Lista de precios de cristales</button></div>
       <input class="inp" id="if" style="flex:1;min-width:200px" placeholder="Buscar…"></div><div id="ilist"></div></div>`;
   },
@@ -1279,10 +1309,11 @@ routes.inventario = {
       const f = $('#if').value.trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
       if (invTab === 'monturas') {
         const l = db.monturas.filter(m => !f || [m.codigo, m.marca, m.modelo, m.material, m.color].join(' ').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().includes(f)).sort((a, b) => a.codigo.localeCompare(b.codigo, 'es', { numeric: true }));
-        $('#ilist').innerHTML = l.length ? `<div class="tbl-wrap"><table><thead><tr><th>Código</th><th>Montura</th><th class="hide-sm">Material</th><th class="r">Precio</th><th class="c">Stock</th></tr></thead><tbody>
+        $('#ilist').innerHTML = l.length ? `<div class="tbl-wrap"><table><thead><tr><th>Código</th><th>Montura</th><th class="hide-sm">Material</th><th class="r">Precio</th><th class="c">Stock</th><th></th></tr></thead><tbody>
           ${l.map(m => `<tr class="link" data-id="${m.id}"><td><span class="tag">${esc(m.codigo)}</span></td><td><b>${esc(m.marca)}</b> ${esc(m.modelo)}<div class="muted small">${esc(m.color || '')}</div></td><td class="hide-sm">${esc(m.material || '—')}</td><td class="r num">${money(m.precio)}</td>
-          <td class="c"><span class="chip ${num(m.stock) <= 0 ? 'deuda' : num(m.stock) <= 1 ? 'pend' : 'plain'}">${m.stock}</span></td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${icon('box')}<div>No hay monturas.</div></div>`;
-        $$('#ilist [data-id]').forEach(r => r.onclick = () => monturaForm(db.monturas.find(x => x.id === r.dataset.id)));
+          <td class="c"><span class="chip ${num(m.stock) <= 0 ? 'deuda' : num(m.stock) <= 1 ? 'pend' : 'plain'}">${m.stock}</span></td><td class="r"><button class="btn sm" data-add="${m.id}" title="Sumar unidades">${icon('plus')}<span class="hide-sm">Stock</span></button></td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${icon('box')}<div>No hay monturas.</div></div>`;
+        $$('#ilist [data-id]').forEach(r => r.onclick = e => { if (!e.target.closest('[data-add]')) monturaForm(db.monturas.find(x => x.id === r.dataset.id)); });
+        $$('#ilist [data-add]').forEach(b => b.onclick = () => stockForm(db.monturas.find(x => x.id === b.dataset.add)));
       } else {
         const l = db.cristales.filter(c => !f || [c.nombre, c.tipo].join(' ').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().includes(f));
         $('#ilist').innerHTML = l.length ? `<div class="tbl-wrap"><table><thead><tr><th>Cristal</th><th class="hide-sm">Tipo</th><th class="r">Precio</th></tr></thead><tbody>
@@ -1293,10 +1324,54 @@ routes.inventario = {
     $$('#iseg button').forEach(b => b.onclick = () => { invTab = b.dataset.k; render(); });
     $('#if').oninput = draw; draw();
     $('#newi').onclick = () => invTab === 'monturas' ? monturaForm() : cristalForm();
+    $('#ingreso') && ($('#ingreso').onclick = () => ingresoForm());
   },
 };
-function monturaForm(m) {
-  const e = m || { stock: 1 };
+// Llegó mercadería: se escribe el código; si ya existe se suman unidades, si no se registra nueva.
+function ingresoForm() {
+  modal({
+    title: 'Llegó mercadería',
+    body: `<form id="ing" class="form"><p class="muted small" style="margin:0">Escribe el código de la montura. Si ya está registrada solo se suman las unidades; si es nueva, la registras.</p>
+      <label class="f">Código de la montura<input class="inp" name="codigo" list="inglist" required autocomplete="off" placeholder="Ej. M-101"><datalist id="inglist">${db.monturas.map(m => `<option value="${esc(m.codigo)}">${esc(m.marca)} ${esc(m.modelo)} · stock ${m.stock}</option>`).join('')}</datalist></label>
+      <label class="f">¿Cuántas unidades llegaron?<input class="inp" name="cant" inputmode="numeric" value="1" required></label></form>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="ing">Continuar</button>`,
+    onMount: bg => {
+      $('#ing', bg).onsubmit = e => {
+        e.preventDefault();
+        const f = readForm(e.target), cant = Math.max(1, parseInt(f.cant, 10) || 1);
+        const m = db.monturas.find(x => x.codigo.toLowerCase() === f.codigo.trim().toLowerCase());
+        closeModal();
+        if (m) stockForm(m, cant); else monturaForm(null, { codigo: f.codigo.trim().toUpperCase(), stock: cant });
+      };
+    },
+  });
+}
+function stockForm(m, cant = 1) {
+  modal({
+    title: 'Sumar unidades',
+    body: `<form id="stf" class="form">
+      <div class="row"><span class="tag">${esc(m.codigo)}</span><div><b>${esc(m.marca)} ${esc(m.modelo)}</b><div class="muted small">${esc(m.color || '')} · ${money(m.precio)}</div></div></div>
+      <div class="row between"><span class="muted">Stock actual</span><b class="num" style="font-size:20px">${m.stock}</b></div>
+      <label class="f">Unidades que llegaron<input class="inp" name="cant" inputmode="numeric" value="${cant}" required></label>
+      <label class="f">Costo por unidad <span class="hint">(opcional)</span><input class="inp" name="costo" inputmode="decimal" value="${esc(m.costo || '')}"></label>
+      <div class="row between"><span class="muted">Quedará en</span><b class="num" id="stnew" style="font-size:20px">${num(m.stock) + cant}</b></div></form>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="stf">${icon('check')} Sumar al stock</button>`,
+    onMount: bg => {
+      const c = $('[name=cant]', bg);
+      c.oninput = () => { $('#stnew', bg).textContent = num(m.stock) + Math.max(0, parseInt(c.value, 10) || 0); };
+      $('#stf', bg).onsubmit = e => {
+        e.preventDefault();
+        const f = readForm(e.target), n = parseInt(f.cant, 10) || 0;
+        if (n <= 0) return toast('Pon cuántas unidades llegaron');
+        m.stock = num(m.stock) + n; if (f.costo) m.costo = num(f.costo);
+        m.ingresos = [...(m.ingresos || []), { fecha: hoy(), cant: n, costo: f.costo ? num(f.costo) : '', por: user }];
+        save(); closeModal(); toast(`${m.codigo}: +${n} unidades · stock ${m.stock}`); render();
+      };
+    },
+  });
+}
+function monturaForm(m, pre) {
+  const e = m || { stock: 1, ...(pre || {}) };
   modal({
     title: m ? 'Montura ' + esc(m.codigo) : 'Nueva montura',
     body: `<form id="mf" class="form"><div class="fg">
@@ -1312,7 +1387,9 @@ function monturaForm(m) {
       $('#mf', bg).onsubmit = ev => {
         ev.preventDefault();
         const f = readForm(ev.target); f.precio = num(f.precio); f.stock = num(f.stock); f.costo = f.costo ? num(f.costo) : '';
-        if (db.monturas.some(x => x !== m && x.codigo.toLowerCase() === f.codigo.toLowerCase())) { toast('Ya existe una montura con ese código'); return; }
+        const dup = db.monturas.find(x => x !== m && x.codigo.toLowerCase() === f.codigo.toLowerCase());
+        if (dup && !m) { closeModal(); stockForm(dup, f.stock || 1); return; }
+        if (dup) { toast('Ya existe otra montura con ese código'); return; }
         const doit = () => { if (m) Object.assign(m, f); else db.monturas.push({ id: uid(), ...f }); save(); closeModal(); toast('Montura guardada'); render(); };
         m && num(m.precio) !== f.precio ? dual(`Cambiar precio de montura ${m.codigo}: ${money(m.precio)} → ${money(f.precio)}`, doit) : doit();
       };
@@ -1539,7 +1616,20 @@ function seedDemo() {
   db.cierres.push({ fecha: addDays(d, -1), por: S[0].id, ts: Date.now() - 864e5 });
 }
 
+// Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
+const APP_VERSION = '2026.09.23.3';
+async function buscarActualizacion() {
+  if (EN_CLAUDE || location.protocol === 'file:') return;
+  try {
+    const v = (await (await fetch('version.txt?t=' + Date.now(), { cache: 'no-store' })).text()).trim();
+    if (v && v !== APP_VERSION && !$('.modal-bg')) location.reload();
+  } catch (e) { }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') buscarActualizacion(); });
+setInterval(buscarActualizacion, 15 * 60 * 1000);
+
 render();
+logoInicial();
 
 // Instalable en el teléfono/tablet y funciona sin internet (solo cuando se sirve por https o localhost).
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost') && !EN_CLAUDE) {

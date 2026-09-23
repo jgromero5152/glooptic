@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#14263f">
+<meta name="theme-color" content="#1c1c1b">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -57,7 +57,8 @@ h1,h2,h3{font-family:var(--serif);font-weight:600;letter-spacing:-.01em;margin:0
 .app{display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100dvh}
 .side{background:var(--brand);color:#dfe6f0;padding:22px 16px;position:sticky;top:var(--safe-top);height:calc(100dvh - var(--safe-top) - var(--safe-bottom));display:flex;flex-direction:column;gap:6px}
 .brand{display:flex;align-items:center;gap:12px;padding:4px 8px 22px}
-.brand .logo{width:40px;height:40px;border-radius:12px;background:linear-gradient(145deg,#2aa39c,#1c6f8c);display:grid;place-items:center;flex:none}
+.brand .logo{width:40px;height:40px;border-radius:12px;background:#1c1c1b;display:grid;place-items:center;flex:none;overflow:hidden}
+.logo img{width:100%;height:100%;object-fit:cover;display:block}
 .brand .logo svg{width:24px;height:24px;color:#fff}
 .brand b{font-family:var(--serif);font-size:19px;color:#fff;font-weight:600;display:block;line-height:1.1}
 .brand small{font-size:12px;color:#9fb0c6}
@@ -149,7 +150,7 @@ tfoot td{font-weight:700;border-top:1px solid var(--line);border-bottom:0}
 .chip.deuda{background:var(--danger-soft);color:var(--danger)}
 .chip.plain{background:var(--line-2);color:var(--ink-2)}
 .chip.plain::before{display:none}
-.tag{display:inline-block;padding:2px 8px;border-radius:6px;background:var(--line-2);font-size:12px;font-weight:600;color:var(--ink-2)}
+.tag{display:inline-block;white-space:nowrap;padding:2px 8px;border-radius:6px;background:var(--line-2);font-size:12px;font-weight:600;color:var(--ink-2)}
 .muted{color:var(--muted)}
 .small{font-size:13px}
 .strong{font-weight:600}
@@ -249,7 +250,7 @@ textarea.inp{min-height:76px;resize:vertical}
 .login{min-height:calc(100dvh - var(--safe-top) - var(--safe-bottom));display:grid;place-items:center;padding:20px;background:radial-gradient(1200px 600px at 10% -10%,var(--glow1) 0,transparent 60%),radial-gradient(900px 500px at 110% 110%,var(--glow2) 0,transparent 60%),var(--bg)}
 .login .box{width:100%;max-width:440px;background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:34px;box-shadow:0 30px 80px -30px rgba(20,38,63,.3)}
 .login .box.wide{max-width:560px}
-.login .logo{width:54px;height:54px;border-radius:16px;background:linear-gradient(145deg,#2aa39c,#1c6f8c);display:grid;place-items:center;margin-bottom:18px}
+.login .logo{width:64px;height:64px;border-radius:18px;background:#1c1c1b;display:grid;place-items:center;margin-bottom:18px;overflow:hidden}
 .login .logo svg{width:30px;height:30px;color:#fff}
 .login h1{font-size:28px}
 .who{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:20px 0 14px}
@@ -373,6 +374,6 @@ textarea.inp{min-height:76px;resize:vertical}
 <body>
 <div id="root"></div>
 <div id="print"></div>
-<script src="app.js"></script>
+<script src="app.js?v=2026.09.23.3"></script>
 </body>
 </html>
