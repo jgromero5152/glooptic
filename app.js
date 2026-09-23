@@ -51,13 +51,13 @@ async function saveFile(filename, data) {
 
 const I = {
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
-  home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
-  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
-  file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>',
-  cash: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/>',
+  home: '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .71-1.53l7-6a2 2 0 0 1 2.58 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  users: '<circle cx="10" cy="8" r="5"/><path d="M18 21a8 8 0 0 0-16 0"/><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>',
+  file: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/>',
+  cash: '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>',
   box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
-  bell: '<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
-  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68 1.65 1.65 0 0 0 10 3.17V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  bell: '<path d="M3.26 15.33A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.67C19.41 13.96 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.41 5.96-2.74 7.33"/><path d="M10.27 21a2 2 0 0 0 3.46 0M22 8c0-2.3-.8-4.3-2-6M4 2C2.8 3.7 2 5.7 2 8"/>',
+  gear: '<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
@@ -75,10 +75,14 @@ const I = {
   wallet: '<path d="M20 12V8H6a2 2 0 0 1 0-4h12v4"/><path d="M4 6v12a2 2 0 0 0 2 2h14v-4"/><path d="M18 12a2 2 0 0 0 0 4h4v-4z"/>',
   down: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
   up: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+  glasses: '<circle cx="6" cy="15" r="4"/><circle cx="18" cy="15" r="4"/><path d="M14 15a2 2 0 0 0-4 0"/><path d="M2.5 13 5 7c.7-1.3 1.4-2 3-2M21.5 13 19 7c-.7-1.3-1.5-2-3-2"/>',
+  apps: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
   chart: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/>',
 };
+const TILE = { inicio: '#2563eb', pacientes: '#7c3aed', ordenes: '#f79009', caja: '#079455', inventario: '#0891b2', recordatorios: '#e11d48', ajustes: '#475467', mas: '#475467' };
+const tile = (k, i) => `<span class="tile" style="--c:${TILE[k]}">${icon(i)}</span>`;
 const icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${I[n] || ''}</svg>`;
 
 // ---------- Datos ----------
@@ -266,7 +270,7 @@ function render() {
 function shell(key, content) {
   const nav = [
     ['inicio', 'Inicio', 'home'], ['pacientes', 'Pacientes', 'users'], ['ordenes', 'Órdenes', 'file'],
-    ['caja', 'Caja diaria', 'cash'], ['inventario', 'Inventario', 'box'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear'],
+    ['caja', 'Caja diaria', 'cash'], ['inventario', 'Inventario', 'glasses'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear'],
   ];
   const recs = recordatoriosData().total;
   const pend = db.ordenes.filter(o => o.estado !== 'entregado').length;
@@ -276,7 +280,7 @@ function shell(key, content) {
   return `<div class="app">
     <aside class="side">
       <div class="brand"><div class="logo"><img src="logo-mark.png" alt=""></div><div><b>${esc(db.config.nombre || 'Mi Óptica')}</b><small>Sistema de gestión</small></div></div>
-      <nav class="nav">${nav.map(([k, t, i]) => `<a href="#/${k}" class="${active(k)}">${icon(i)}<span>${t}</span>${badge(k)}</a>`).join('')}</nav>
+      <nav class="nav">${nav.map(([k, t, i]) => `<a href="#/${k}" class="${active(k)}">${tile(k, i)}<span>${t}</span>${badge(k)}</a>`).join('')}</nav>
       <div class="me"><div class="avatar">${initials(u.nombre)}</div><div><b>${esc(u.nombre)}</b><small>Socio</small></div><button id="logout" title="Cambiar de usuario">${icon('logout')}</button></div>
     </aside>
     <div class="main">
@@ -287,8 +291,8 @@ function shell(key, content) {
       </header>
       <main class="content">${content}</main>
     </div>
-    <nav class="mobile-bar">${[nav[0], nav[1], nav[2], nav[3], ['mas', 'Más', 'menu']].map(([k, t, i]) =>
-      `<a href="${k === 'mas' ? '#' : '#/' + k}" ${k === 'mas' ? 'id="mas"' : ''} class="${active(k)}">${icon(i)}<span>${t}</span>${k === 'mas' && recs ? `<span class="badge">${recs}</span>` : badge(k)}</a>`).join('')}</nav>
+    <nav class="mobile-bar">${[nav[0], nav[1], nav[2], nav[3], ['mas', 'Más', 'apps']].map(([k, t, i]) =>
+      `<a href="${k === 'mas' ? '#' : '#/' + k}" ${k === 'mas' ? 'id="mas"' : ''} class="${active(k)}">${tile(k, i)}<span>${t}</span>${k === 'mas' && recs ? `<span class="badge">${recs}</span>` : badge(k)}</a>`).join('')}</nav>
   </div>`;
 }
 
@@ -299,9 +303,9 @@ function bindShell() {
   $('.side .me').onclick = e => { if (innerWidth <= 1180 && !e.target.closest('#logout')) confirmBox(`¿Salir de la cuenta de ${esc(me().nombre)}?`, out, 'Cambiar de usuario'); };
   $('#mas').onclick = e => {
     e.preventDefault();
-    modal({ title: 'Más opciones', body: `<div class="card" style="box-shadow:none">${[['inventario', 'Inventario', 'box'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear']]
-      .map(([k, t, i]) => `<a class="list-item link" href="#/${k}" data-close><span class="ini">${icon(i)}</span><span class="grow t">${t}</span></a>`).join('')}
-      <a class="list-item link" href="#" id="out3"><span class="ini">${icon('logout')}</span><span class="grow t">Cambiar de usuario</span></a></div>`,
+    modal({ title: 'Más opciones', body: `<div class="card" style="box-shadow:none">${[['inventario', 'Inventario', 'glasses'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear']]
+      .map(([k, t, i]) => `<a class="list-item link" href="#/${k}" data-close>${tile(k, i)}<span class="grow t">${t}</span></a>`).join('')}
+      <a class="list-item link" href="#" id="out3"><span class="tile" style="--c:#98a2b3">${icon('logout')}</span><span class="grow t">Cambiar de usuario</span></a></div>`,
       onMount: bg => { $$('a[data-close]', bg).forEach(a => a.onclick = closeModal); $('#out3', bg).onclick = e => { e.preventDefault(); closeModal(); out(); }; } });
   };
   const inp = $('#gsearch'), res = $('#gres');
@@ -2262,7 +2266,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.23.8';
+const APP_VERSION = '2026.09.23.9';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
