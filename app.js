@@ -104,8 +104,8 @@ try { user = sessionStorage.getItem(SESSION); } catch (e) { }
 
 function blank() {
   return {
-    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, nextMontura: 1, socios: [], fact: FACT_DEF(), abrev: ABREV_DEF(), tarifasV: 1, productosV: 1 },
-    pacientes: [], medidas: [], monturas: [], cristales: [], tarifas: tarifasDef(), productos: productosDef(), ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [], comprobantes: [],
+    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, nextMontura: 1, socios: [], fact: FACT_DEF(), abrev: ABREV_DEF(), tarifasV: 1, productosV: 2 },
+    pacientes: [], medidas: [], monturas: [], cristales: [], tarifas: tarifasDef(), productos: productosDef(), anuladas: [], ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [], comprobantes: [],
   };
 }
 function load() {
@@ -123,6 +123,11 @@ function normDb(d) {
   d.tarifas = d.tarifas || [];
   if (!d.config.productosV) { if (!d.productos || !d.productos.length) d.productos = productosDef(); d.config.productosV = 1; }
   d.productos = d.productos || [];
+  if (d.config.productosV < 2) { // Jorge pidió que se llamen "Accesorios"
+    d.productos.forEach(p => { if (p.grupo === 'Repuestos') p.grupo = 'Accesorios'; if (p.id === 'luna-color' && p.nombre === 'Color de lunas completo') p.nombre = 'Color de lunas'; });
+    d.config.productosV = 2;
+  }
+  d.anuladas = d.anuladas || [];
   const ab = ABREV_DEF(); d.config.abrev = Object.assign(ab, d.config.abrev || {});
   const deTabla = s => (ab.color.find(([n]) => n.toLowerCase() === s.toLowerCase()) || [s])[0];
   d.monturas.forEach(m => {
@@ -687,7 +692,7 @@ routes['nueva-orden'] = {
             <div class="fg"><div class="fld">Montura<div class="search" style="max-width:none">${icon('search')}<input id="mcode" placeholder="N° de varilla, marca o sigla…" autocomplete="off"><div class="sr" id="mres" hidden></div></div></div>
             <label class="f">Lunas<select class="inp" id="csel"><option value="">Elegir tipo de luna…</option>${gruposTarifa().map(([g, ts]) => `<optgroup label="${esc(g)}">${ts.map(t => `<option value="t:${t.id}">${esc(t.nombre)}</option>`).join('')}</optgroup>`).join('')}
               ${db.cristales.length ? `<optgroup label="Otros cristales (precio fijo)">${db.cristales.map(c => `<option value="c:${c.id}">${esc(c.nombre)} — ${money(c.precio)}</option>`).join('')}</optgroup>` : ''}</select></label>
-            <label class="f">Repuestos y otros<select class="inp" id="psel"><option value="">Elegir repuesto, accesorio o servicio…</option>${gruposProducto().map(([g, ps]) => `<optgroup label="${esc(g)}">${ps.map(p => `<option value="${p.id}">${esc(p.nombre)} — ${money(p.precio)}${conStock(p) ? ` · stock ${p.stock}` : ''}</option>`).join('')}</optgroup>`).join('')}</select></label></div>
+            <div class="fld">Accesorios y otros<div class="search" style="max-width:none">${icon('search')}<input id="pq" placeholder="Ej. tornillo, plaquetas, estuche…" autocomplete="off"><div class="sr" id="pres" hidden></div></div></div></div>
             <div id="lpanel"></div>
             <div class="tbl-wrap mt"><table class="items"><thead><tr><th>Descripción</th><th class="c" style="width:70px">Cant.</th><th class="r" style="width:120px">Precio</th><th class="r" style="width:110px">Subtotal</th><th style="width:40px"></th></tr></thead><tbody id="itbody"></tbody></table></div>
             <button class="btn sm mt-s" id="addo">${icon('plus')} Otro producto o servicio</button>
@@ -750,8 +755,25 @@ routes['nueva-orden'] = {
         <div class="small muted">${aviso}</div>
         <div class="pick" id="lcols">${botones || '<span class="muted small">Elige el rango para ver los precios.</span>'}</div>
         ${botones ? '<div class="hint">Toca el tratamiento para agregarlo a la venta.</div>' : ''}
-        ${extrasLuna().length ? `<div class="fld">Extras<div class="pick" id="lext">${extrasLuna().map(p => `<button type="button" data-p="${p.id}">${icon('plus')} ${esc(p.nombre)} <small>${money(p.precio)}</small></button>`).join('')}</div></div>` : ''}</div>`;
-      $$('#lext [data-p]').forEach(b => b.onclick = () => { agregarProducto(producto(b.dataset.p)); b.classList.add('on'); });
+        ${extrasLuna().length ? `<div class="fld">Extras<div class="pick" id="lext">${extrasLuna().map(p => `<button type="button" data-p="${p.id}">${icon('plus')} ${esc(p.nombre)} <small>${money(p.precio)}</small></button>`).join('')}</div></div>
+        <div class="lcolor" id="lcolor" hidden><div class="seg" id="lctipo"><button type="button" data-t="completo" class="on">Completo</button><button type="button" data-t="degradado">Degradado</button></div>
+          <div class="fg"><label class="f">Tono<input class="inp sm" id="lctono" list="ltonos" placeholder="Gris, marrón, verde…" autocomplete="off"><datalist id="ltonos">${TONOS.map(t => `<option value="${t}">`).join('')}</datalist></label>
+          <label class="f">Intensidad<select class="inp sm" id="lcpct"><option value="">Elegir %…</option>${Array.from({ length: 200 }, (_, i) => (i + 1) / 2).map(v => `<option value="${v}">${String(v).replace('.', ',')}%</option>`).join('')}</select></label></div>
+          <button type="button" class="btn sm primary" id="lcadd">${icon('plus')} Agregar color</button></div>` : ''}</div>`;
+      // "Color de lunas": se elige completo o degradado, el tono y el porcentaje antes de agregarlo.
+      let colorP = null;
+      $$('#lext [data-p]').forEach(b => b.onclick = () => {
+        const p = producto(b.dataset.p);
+        if (!/color/i.test(p.nombre)) { agregarProducto(p); b.classList.add('on'); return; }
+        colorP = p; $('#lcolor').hidden = false; $('#lcadd').innerHTML = `${icon('plus')} Agregar color · ${money(p.precio)}`;
+      });
+      $$('#lctipo button').forEach(b => b.onclick = () => $$('#lctipo button').forEach(x => x.classList.toggle('on', x === b)));
+      $('#lcadd') && ($('#lcadd').onclick = () => {
+        const tipo = $('#lctipo .on').dataset.t, tono = $('#lctono').value.trim(), pct = $('#lcpct').value;
+        const desc = [colorP.nombre, tipo, tono.toLowerCase(), pct && String(pct).replace('.', ',') + '%'].filter(Boolean).join(' ');
+        draft.items.push({ tipo: 'producto', ref: colorP.id, desc, cant: 1, precio: colorP.precio }); drawItems();
+        $('#lcolor').hidden = true; toast('Color agregado: ' + desc);
+      });
       $('#lfila').onchange = e => { fSel = +e.target.value; panel(); };
       $$('#lcols [data-j]').forEach(b => b.onclick = () => {
         const j = +b.dataset.j;
@@ -783,7 +805,7 @@ routes['nueva-orden'] = {
       if (conStock(p) && num(p.stock) <= 0) toast(`Atención: ${p.nombre} figura sin stock`);
       draft.items.push({ tipo: 'producto', ref: p.id, desc: p.nombre, cant: 1, precio: p.precio }); drawItems();
     };
-    $('#psel').onchange = () => { agregarProducto(producto($('#psel').value)); $('#psel').value = ''; };
+    buscadorProductos($('#pq'), $('#pres'), agregarProducto);
     repreciar();
     $('#addo').onclick = () => { draft.items.push({ tipo: 'otro', desc: '', cant: 1, precio: '' }); drawItems(); $$('#itbody [data-k=desc]').pop().focus(); };
     if (p) {
@@ -881,8 +903,10 @@ routes.orden = {
       dual(`Anular pago de ${money(pg.monto)} (${pg.metodo}) de la orden N° ${pad(o.numero)}`, () => { db.pagos = db.pagos.filter(x => x !== pg); save(); toast('Pago anulado'); render(); });
     });
     $('#oedit').onclick = () => dual(`Corregir productos o precios de la orden N° ${pad(o.numero)}`, () => ordenEdit(o));
-    $('#odel').onclick = () => dual(`Anular la orden N° ${pad(o.numero)} y sus pagos`, () => {
+    // Solo el dueño anula; la orden y sus pagos quedan guardados en "Ventas anuladas" (Ajustes).
+    $('#odel').onclick = () => pideDueno(`Anular la orden N° ${pad(o.numero)} de ${p ? p.nombre : 'cliente'} · total ${money(totalOrden(o))} · pagado ${money(pagadoOrden(o))}`, () => {
       moverStock(o.items, +1);
+      db.anuladas.unshift({ ...o, pacienteNombre: p ? p.nombre : '', total: totalOrden(o), pagos: pagosDe(o.id), anuladaTs: Date.now(), anuladaPor: user });
       db.pagos = db.pagos.filter(x => x.ordenId !== o.id); db.ordenes = db.ordenes.filter(x => x !== o); save(); toast('Orden anulada'); go('#/ordenes');
     });
     $('#ocp').onclick = () => { const cp = comprobanteDe(o.id); cp ? comprobanteView(cp) : emitirForm(o); };
@@ -1580,15 +1604,35 @@ function productosDef() {
     ['Varillas niño de goma (par)', 60], ['Plaquetas niño de goma (par)', 25], ['Tuercas (unidad)', 3], ['Tornillos (unidad)', 3], ['Soldadura plástica', 20],
     ['Soldadura por punto', 18], ['Nylon', 10], ['Flex tambor', 18], ['Pase', 10], ['Flex', 20], ['Sujetador simple', 3], ['Sujetador deportivo', 20],
     ['Sujetador dama con pedrería', 25], ['Fórmula para lavar gafas', 10], ['Estuche cofre', 10], ['Estuche grande cofre y deportivo', 20]];
-  return [...rep.map(([nombre, precio], i) => ({ id: 'rep-' + (i + 1), grupo: 'Repuestos', nombre, precio, stock: '' })),
-    { id: 'luna-color', grupo: 'Extras de lunas', nombre: 'Color de lunas completo', precio: 30, stock: '' }];
+  return [...rep.map(([nombre, precio], i) => ({ id: 'rep-' + (i + 1), grupo: 'Accesorios', nombre, precio, costo: '', stock: '' })),
+    { id: 'luna-color', grupo: 'Extras de lunas', nombre: 'Color de lunas', precio: 30, costo: '', stock: '' }];
 }
 const producto = id => db.productos.find(p => p.id === id);
 const conStock = p => String(p.stock ?? '').trim() !== '';
 const extrasLuna = () => db.productos.filter(p => /luna/i.test(p.grupo));
-function gruposProducto() {
-  const g = new Map(); db.productos.forEach(p => { if (!g.has(p.grupo)) g.set(p.grupo, []); g.get(p.grupo).push(p); });
-  return [...g.entries()];
+const accesorios = () => db.productos.filter(p => !/luna/i.test(p.grupo)); // los extras de lunas salen al elegir las lunas
+const TONOS = ['Gris', 'Marrón', 'Verde', 'Azul', 'Rosa', 'Amarillo', 'Morado', 'Naranja', 'Rojo', 'Celeste'];
+// Busca por nombre o grupo: "tornillo" → Tornillos; "accesorios" → todo el grupo.
+function buscarProductos(q) {
+  const toks = sinTilde(q).split(/\s+/).filter(Boolean);
+  return accesorios().filter(p => { const t = sinTilde(p.grupo + ' ' + p.nombre); return toks.every(k => t.includes(k)); });
+}
+function buscadorProductos(inp, res, onPick) {
+  let lista = [];
+  const pintar = () => {
+    const q = inp.value.trim();
+    lista = (q ? buscarProductos(q) : accesorios()).slice(0, 60);
+    res.innerHTML = lista.map(p => `<a href="#" data-p="${p.id}"><span class="grow"><b>${esc(p.nombre)}</b><br><span class="muted small">${esc(p.grupo)}</span></span>
+      <span style="text-align:right;white-space:nowrap"><b class="num">${money(p.precio)}</b>${conStock(p) ? `<br><span class="chip ${chipStock(p)}">${p.stock} en stock</span>` : ''}</span></a>`).join('') || `<div class="empty small">No hay productos con “${esc(q)}”</div>`;
+    res.hidden = false;
+    $$('[data-p]', res).forEach(a => a.onclick = e => { e.preventDefault(); inp.value = ''; res.hidden = true; onPick(producto(a.dataset.p)); });
+  };
+  inp.oninput = pintar; inp.onfocus = pintar;
+  inp.onkeydown = e => {
+    if (e.key === 'Enter') { e.preventDefault(); if (inp.value.trim() && lista[0]) { const p = lista[0]; inp.value = ''; res.hidden = true; onPick(p); } }
+    if (e.key === 'Escape') res.hidden = true;
+  };
+  inp.onblur = () => setTimeout(() => { res.hidden = true; }, 200);
 }
 // Resta (signo -1) o devuelve (+1) el stock de monturas y productos de una venta.
 function moverStock(items, signo) {
@@ -1598,23 +1642,24 @@ function moverStock(items, signo) {
   });
 }
 function productoForm(p) {
-  const e = p || { grupo: 'Repuestos', stock: '' };
+  const e = p || { grupo: 'Accesorios', stock: '' };
   const grupos = [...new Set(db.productos.map(x => x.grupo))];
   modal({
     title: p ? 'Editar producto' : 'Nuevo producto',
     body: `<form id="pf" class="form"><label class="f">Nombre<input class="inp" name="nombre" required value="${esc(e.nombre)}" placeholder="Ej. Tornillos (unidad)"></label>
       <div class="fg"><label class="f">Grupo<input class="inp" name="grupo" list="pgrupos" required value="${esc(e.grupo)}"><datalist id="pgrupos">${grupos.map(g => `<option value="${esc(g)}">`).join('')}</datalist></label>
-      <label class="f">Precio<input class="inp" name="precio" inputmode="decimal" required value="${esc(e.precio)}"></label>
+      <label class="f">Precio de venta<input class="inp" name="precio" inputmode="decimal" required value="${esc(e.precio)}"></label>
+      <label class="f">Costo <span class="hint">(lo que te cuesta a ti)</span><input class="inp" name="costo" inputmode="decimal" value="${esc(e.costo)}"></label>
       <label class="f">Stock <span class="hint">(déjalo vacío si no llevas la cuenta)</span><input class="inp" name="stock" inputmode="numeric" value="${esc(e.stock)}"></label></div>
       <p class="hint" style="margin:0">Los productos del grupo “Extras de lunas” salen como opción al elegir las lunas en la venta. Agregar o cambiar precios pide la clave del dueño.</p></form>`,
     foot: `${p ? `<button class="btn danger" id="pdel" style="margin-right:auto">${icon('trash')}</button>` : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" form="pf">Guardar</button>`,
     onMount: bg => {
       $('#pf', bg).onsubmit = ev => {
         ev.preventDefault();
-        const f = readForm(ev.target); f.precio = num(f.precio); f.stock = f.stock === '' ? '' : num(f.stock);
+        const f = readForm(ev.target); f.precio = num(f.precio); f.costo = f.costo === '' ? '' : num(f.costo); f.stock = f.stock === '' ? '' : num(f.stock);
         const doit = () => { if (p) Object.assign(p, f); else db.productos.push({ id: uid(), ...f }); save(); closeModal(); toast('Producto guardado'); render(); };
         !p ? pideDueno(`Agregar "${f.nombre}" a ${money(f.precio)}`, doit)
-          : num(p.precio) !== f.precio ? pideDueno(`Cambiar precio de "${p.nombre}": ${money(p.precio)} → ${money(f.precio)}`, doit) : doit();
+          : num(p.precio) !== f.precio || num(p.costo) !== num(f.costo) ? pideDueno(`Cambiar precio o costo de "${p.nombre}"`, doit) : doit();
       };
       $('#pdel', bg) && ($('#pdel', bg).onclick = () => pideDueno(`Eliminar "${p.nombre}"`, () => { db.productos = db.productos.filter(x => x !== p); save(); render(); }));
     },
@@ -1676,8 +1721,8 @@ routes.inventario = {
     const bajo = db.monturas.filter(m => num(m.stock) <= 1).length;
     return `<div class="page-head"><div><h1>Inventario</h1><p>${db.monturas.filter(m => m.clase !== 'sol').length} monturas · ${((n) => `${n} ${n === 1 ? 'lente' : 'lentes'} de sol`)(db.monturas.filter(m => m.clase === 'sol').length)} ·${db.monturas.reduce((s, m) => s + Math.max(0, num(m.stock)), 0)} unidades${bajo ? ` · <span style="color:var(--danger)">${bajo} con stock bajo</span>` : ''}</p></div>
       <div class="actions">${invTab === 'monturas' ? `<button class="btn accent" id="ingreso">${icon('box')} Llegó mercadería</button>` : ''}<button class="btn primary" id="newi">${icon('plus')} ${{ monturas: 'Montura o lente de sol', cristales: 'Nueva lista', productos: 'Nuevo producto' }[invTab]}</button></div></div>
-      <div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="iseg">${[['monturas', 'Monturas y lentes de sol'], ['cristales', 'Precios de lunas'], ['productos', 'Repuestos y otros']].map(([k, t]) => `<button data-k="${k}" class="${invTab === k ? 'on' : ''}">${t}</button>`).join('')}</div>
-      <input class="inp" id="if" style="flex:1;min-width:200px" placeholder="${{ monturas: 'Buscar varilla, marca, sigla o código…', cristales: 'Buscar tipo de luna o tratamiento…', productos: 'Buscar repuesto, accesorio o servicio…' }[invTab]}"></div><div id="ilist"></div></div>`;
+      <div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="iseg">${[['monturas', 'Monturas y lentes de sol'], ['cristales', 'Precios de lunas'], ['productos', 'Accesorios y otros']].map(([k, t]) => `<button data-k="${k}" class="${invTab === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+      <input class="inp" id="if" style="flex:1;min-width:200px" placeholder="${{ monturas: 'Buscar varilla, marca, sigla o código…', cristales: 'Buscar tipo de luna o tratamiento…', productos: 'Buscar accesorio: tornillo, plaquetas, estuche…' }[invTab]}"></div><div id="ilist"></div></div>`;
   },
   bind() {
     const draw = () => {
@@ -1692,8 +1737,8 @@ routes.inventario = {
       } else if (invTab === 'productos') {
         const ps = db.productos.filter(p => !f || sinTilde([p.nombre, p.grupo].join(' ')).includes(f));
         const grupos = [...new Set(ps.map(p => p.grupo))];
-        $('#ilist').innerHTML = ps.length ? `<div class="card-b" style="padding-top:4px">${grupos.map(g => `<h3 class="tgrupo">${esc(g)}</h3><div class="tbl-wrap"><table><thead><tr><th>Producto</th><th class="r">Precio</th><th class="c">Stock</th></tr></thead><tbody>
-          ${ps.filter(p => p.grupo === g).map(p => `<tr class="link" data-id="${p.id}"><td><b>${esc(p.nombre)}</b></td><td class="r num">${money(p.precio)}</td><td class="c">${conStock(p) ? `<span class="chip ${chipStock(p)}">${p.stock}</span>` : '<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table></div>`).join('')}
+        $('#ilist').innerHTML = ps.length ? `<div class="card-b" style="padding-top:4px">${grupos.map(g => `<h3 class="tgrupo">${esc(g)}</h3><div class="tbl-wrap"><table><thead><tr><th>Producto</th><th class="r">Costo</th><th class="r">Precio</th><th class="c">Stock</th></tr></thead><tbody>
+          ${ps.filter(p => p.grupo === g).map(p => `<tr class="link" data-id="${p.id}"><td><b>${esc(p.nombre)}</b></td><td class="r num muted">${String(p.costo ?? '') !== '' ? money(p.costo) : '—'}</td><td class="r num">${money(p.precio)}</td><td class="c">${conStock(p) ? `<span class="chip ${chipStock(p)}">${p.stock}</span>` : '<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table></div>`).join('')}
           <p class="hint">Agregar productos o cambiar precios pide la clave del dueño. El stock es opcional.</p></div>` : `<div class="empty">No hay productos.</div>`;
         $$('#ilist [data-id]').forEach(r => r.onclick = () => productoForm(producto(r.dataset.id)));
       } else {
@@ -1999,7 +2044,11 @@ routes.ajustes = {
           <div style="border-top:1px solid var(--line-2);margin-top:16px;padding-top:14px"><b class="small">¿Terminaste de probar?</b><p class="muted small" style="margin:4px 0 10px">Borra los datos de ejemplo y empieza con tus pacientes reales. Pide la clave de ambos socios.</p>
           <button class="btn danger" id="reset">${icon('trash')} Empezar de cero</button></div></div></div>
         <div class="card"><div class="card-h"><h3>Cambios autorizados</h3><span class="sub">Últimos 20</span></div><div class="card-b" style="padding-top:8px">
-          ${db.log.length ? db.log.slice(0, 20).map(l => `<div style="padding:8px 0;border-bottom:1px solid var(--line-2)"><div class="small"><b>${esc(l.accion)}</b></div><div class="muted small">${new Date(l.ts).toLocaleString('es-PE', { dateStyle: 'medium', timeStyle: 'short' })} · ${esc(socioName(l.por))}${l.autoriza ? ' · autorizado por ambos' : ''}</div></div>`).join('') : `<div class="empty" style="padding:14px">Sin registros.</div>`}</div></div>
+          ${db.log.length ? db.log.slice(0, 20).map(l => `<div style="padding:8px 0;border-bottom:1px solid var(--line-2)"><div class="small"><b>${esc(l.accion)}</b></div><div class="muted small">${new Date(l.ts).toLocaleString('es-PE', { dateStyle: 'medium', timeStyle: 'short' })} · ${esc(socioName(l.por))}${l.autoriza ? (l.autoriza.length > 1 ? ' · autorizado por ambos' : ' · con clave del dueño') : ''}</div></div>`).join('') : `<div class="empty" style="padding:14px">Sin registros.</div>`}</div></div>
+        <div class="card"><div class="card-h"><h3>Ventas anuladas</h3><span class="sub">Quedan guardadas con sus pagos</span></div><div class="card-b" style="padding-top:8px">
+          ${db.anuladas.length ? db.anuladas.slice(0, 30).map(a => `<div style="padding:8px 0;border-bottom:1px solid var(--line-2)"><div class="row between small"><b>N° ${pad(a.numero)} · ${esc(a.pacienteNombre || '—')}</b><b class="num">${money(a.total)}</b></div>
+            <div class="muted small">${esc(a.items.map(i => i.desc).join(' · '))}</div>
+            <div class="muted small">Venta ${fdate(a.fecha)} · pagado ${money(a.pagos.reduce((s, x) => s + num(x.monto), 0))} · anulada ${new Date(a.anuladaTs).toLocaleString('es-PE', { dateStyle: 'medium', timeStyle: 'short' })} por ${esc(socioName(a.anuladaPor))}</div></div>`).join('') : `<div class="empty" style="padding:14px">No hay ventas anuladas.</div>`}</div></div>
       </div>`;
   },
   bind() {
@@ -2142,7 +2191,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.23.6';
+const APP_VERSION = '2026.09.23.7';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
