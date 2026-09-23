@@ -104,8 +104,8 @@ try { user = sessionStorage.getItem(SESSION); } catch (e) { }
 
 function blank() {
   return {
-    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, nextMontura: 1, socios: [], fact: FACT_DEF(), abrev: ABREV_DEF() },
-    pacientes: [], medidas: [], monturas: [], cristales: [], ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [], comprobantes: [],
+    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, nextMontura: 1, socios: [], fact: FACT_DEF(), abrev: ABREV_DEF(), tarifasV: 1 },
+    pacientes: [], medidas: [], monturas: [], cristales: [], tarifas: tarifasDef(), ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [], comprobantes: [],
   };
 }
 function load() {
@@ -118,6 +118,9 @@ function normDb(d) {
   if (!d.config.fact.ruc && d.config.ruc) d.config.fact.ruc = d.config.ruc;
   if (!d.config.fact.direccion && d.config.direccion) d.config.fact.direccion = d.config.direccion;
   d.comprobantes = d.comprobantes || [];
+  // La lista de precios de lunas se carga una sola vez; después solo la cambia el dueño.
+  if (!d.config.tarifasV) { if (!d.tarifas || !d.tarifas.length) d.tarifas = tarifasDef(); d.config.tarifasV = 1; }
+  d.tarifas = d.tarifas || [];
   const ab = ABREV_DEF(); d.config.abrev = Object.assign(ab, d.config.abrev || {});
   const deTabla = s => (ab.color.find(([n]) => n.toLowerCase() === s.toLowerCase()) || [s])[0];
   d.monturas.forEach(m => {
@@ -240,12 +243,13 @@ document.addEventListener('click', e => { if (!e.target.closest('.search')) $$('
 function render() {
   const root = $('#root');
   if (!db) { root.innerHTML = setupView(); bindSetup(); return; }
-  if (!user || !me()) { root.innerHTML = loginView(); bindLogin(); return; }
+  if (!user || !me()) { ajustesAbierto = false; root.innerHTML = loginView(); bindLogin(); return; }
   const [path, qs] = route.split('?');
   const parts = path.split('/').filter(Boolean);
   const q = new URLSearchParams(qs || '');
   const key = parts[0] || 'inicio';
   const view = routes[key] || routes.inicio;
+  if (key !== 'ajustes') ajustesAbierto = false; // al salir de Ajustes se vuelve a cerrar
   root.innerHTML = shell(key, view.html(parts[1], q));
   bindShell();
   view.bind && view.bind(parts[1], q);
@@ -553,7 +557,11 @@ function medidaForm(p, m) {
         const eye = k => ({ esf: f[k + '_esf'], cil: f[k + '_cil'], eje: f[k + '_eje'], add: f[k + '_add'], av: f[k + '_av'] });
         const data = { fecha: f.fecha, dip: f.dip, altura: f.altura, lente: f.lente, filtros: f.filtros, obs: f.obs, od: eye('od'), oi: eye('oi') };
         if (m) Object.assign(m, data);
-        else db.medidas.push({ id: uid(), pacienteId: p.id, creado: Date.now(), por: user, ...data });
+        else {
+          const nueva = { id: uid(), pacienteId: p.id, creado: Date.now(), por: user, ...data };
+          db.medidas.push(nueva);
+          if (draft && draft.pacienteId === p.id) draft.medidaId = nueva.id; // en una venta abierta se usa la medida nueva
+        }
         save(); closeModal(); toast('Medida guardada'); render();
       };
     },
@@ -675,7 +683,9 @@ routes['nueva-orden'] = {
           </div></div>
           <div class="card"><div class="card-h"><h3>2 · Productos</h3></div><div class="card-b">
             <div class="fg"><div class="fld">Montura<div class="search" style="max-width:none">${icon('search')}<input id="mcode" placeholder="N° de varilla, marca o sigla…" autocomplete="off"><div class="sr" id="mres" hidden></div></div></div>
-            <label class="f">Cristales<select class="inp" id="csel"><option value="">Elegir de la lista de precios…</option>${db.cristales.map(c => `<option value="${c.id}">${esc(c.nombre)} — ${money(c.precio)}</option>`).join('')}</select></label></div>
+            <label class="f">Lunas<select class="inp" id="csel"><option value="">Elegir tipo de luna…</option>${gruposTarifa().map(([g, ts]) => `<optgroup label="${esc(g)}">${ts.map(t => `<option value="t:${t.id}">${esc(t.nombre)}</option>`).join('')}</optgroup>`).join('')}
+              ${db.cristales.length ? `<optgroup label="Otros cristales (precio fijo)">${db.cristales.map(c => `<option value="c:${c.id}">${esc(c.nombre)} — ${money(c.precio)}</option>`).join('')}</optgroup>` : ''}</select></label></div>
+            <div id="lpanel"></div>
             <div class="tbl-wrap mt"><table class="items"><thead><tr><th>Descripción</th><th class="c" style="width:70px">Cant.</th><th class="r" style="width:120px">Precio</th><th class="r" style="width:110px">Subtotal</th><th style="width:40px"></th></tr></thead><tbody id="itbody"></tbody></table></div>
             <button class="btn sm mt-s" id="addo">${icon('plus')} Otro producto o servicio</button>
           </div></div>
@@ -701,8 +711,8 @@ routes['nueva-orden'] = {
       $('#itbody').innerHTML = draft.items.length ? draft.items.map((it, i) => `<tr><td><input class="inp" data-i="${i}" data-k="desc" value="${esc(it.desc)}"></td>
         <td><input class="inp c" data-i="${i}" data-k="cant" inputmode="numeric" value="${esc(it.cant)}"></td><td><input class="inp r num" data-i="${i}" data-k="precio" inputmode="decimal" value="${esc(it.precio)}"></td>
         <td class="r num" id="st${i}">${money(num(it.cant) * num(it.precio))}</td><td><button type="button" class="btn ghost icon sm" data-del="${i}" aria-label="Quitar">${icon('x')}</button></td></tr>`).join('')
-        : `<tr><td colspan="5" class="empty" style="padding:18px">Agrega una montura, cristales u otro producto.</td></tr>`;
-      $$('#itbody [data-k]').forEach(inp => inp.oninput = () => { draft.items[inp.dataset.i][inp.dataset.k] = inp.value; const it = draft.items[inp.dataset.i]; $('#st' + inp.dataset.i).textContent = money(num(it.cant) * num(it.precio)); calc(); });
+        : `<tr><td colspan="5" class="empty" style="padding:18px">Agrega una montura, lunas u otro producto.</td></tr>`;
+      $$('#itbody [data-k]').forEach(inp => inp.oninput = () => { draft.items[inp.dataset.i][inp.dataset.k] = inp.value; if (inp.dataset.k === 'precio') draft.items[inp.dataset.i].auto = false; const it = draft.items[inp.dataset.i]; $('#st' + inp.dataset.i).textContent = money(num(it.cant) * num(it.precio)); calc(); });
       $$('#itbody [data-del]').forEach(b => b.onclick = () => { draft.items.splice(+b.dataset.del, 1); drawItems(); });
       calc();
     };
@@ -719,15 +729,59 @@ routes['nueva-orden'] = {
       draft.items.push({ tipo: 'montura', ref: m.id, desc: descMontura(m), cant: 1, precio: m.precio });
       drawItems();
     });
+    // Lunas: el rango (y el precio) sale de la medida elegida; se puede cambiar a mano.
+    const medidaSel = () => db.medidas.find(m => m.id === draft.medidaId);
+    let tSel = null, fSel = null;
+    const panel = () => {
+      const box = $('#lpanel'), t = tSel;
+      if (!t) { box.innerHTML = ''; return; }
+      const med = medidaSel(), pot = potenciaMedida(med), auto = filaParaMedida(t, med);
+      const fila = fSel ?? (auto >= 0 ? auto : tieneRangos(t) ? -1 : 0);
+      const aviso = !tieneRangos(t) ? 'Esta lista se elige a mano.'
+        : !med ? 'Sin medida: elige el rango a mano o registra la medida del paciente.'
+          : auto < 0 ? `<span style="color:var(--danger)">La medida (esf ±${n2r(pot.esf)}, cil −${n2r(pot.cil)}) pasa los rangos de esta lista. Elige el rango a mano o pon el precio.</span>`
+            : `Según la medida (esf ±${n2r(pot.esf)}, cil −${n2r(pot.cil)}) le corresponde el <b>rango ${esc(t.filas[auto].rango)}</b>.`;
+      const botones = t.cols.map((c, j) => { const p = precioTarifa(t, fila, j); return p ? `<button type="button" data-j="${j}">${esc(c)} <small>${money(p)}</small></button>` : ''; }).join('');
+      box.innerHTML = `<div class="lpanel"><b>${esc(t.nombre)}</b>
+        <select class="inp sm" id="lfila" aria-label="Rango">${fila < 0 ? '<option value="-1" selected>Elige el rango…</option>' : ''}${t.filas.map((f, i) => `<option value="${i}" ${i === fila ? 'selected' : ''}>${esc(filaTexto(f))}${i === auto ? ' ✓' : ''}</option>`).join('')}</select>
+        <div class="small muted">${aviso}</div>
+        <div class="pick" id="lcols">${botones || '<span class="muted small">Elige el rango para ver los precios.</span>'}</div>
+        ${botones ? '<div class="hint">Toca el tratamiento para agregarlo a la venta.</div>' : ''}</div>`;
+      $('#lfila').onchange = e => { fSel = +e.target.value; panel(); };
+      $$('#lcols [data-j]').forEach(b => b.onclick = () => {
+        const j = +b.dataset.j;
+        draft.items.push({ tipo: 'luna', ref: t.id, col: j, fila, auto: fila === auto, desc: descLuna(t, fila, j), cant: 1, precio: precioTarifa(t, fila, j) });
+        tSel = null; fSel = null; $('#csel').value = ''; panel(); drawItems();
+      });
+    };
+    // Si cambia la medida, las lunas que se pusieron solas se vuelven a calcular.
+    const repreciar = () => {
+      const med = medidaSel(); let n = 0;
+      draft.items.forEach(it => {
+        const t = it.tipo === 'luna' && it.auto && tarifa(it.ref); if (!t) return;
+        const i = filaParaMedida(t, med), p = precioTarifa(t, i, it.col);
+        if (i < 0 || i === it.fila || !p) return;
+        Object.assign(it, { fila: i, precio: p, desc: descLuna(t, i, it.col) }); n++;
+      });
+      return n;
+    };
     $('#csel').onchange = () => {
-      const c = db.cristales.find(x => x.id === $('#csel').value); if (!c) return;
+      const [k, id] = $('#csel').value.split(':');
+      if (k === 't') { tSel = tarifa(id); fSel = null; panel(); return; }
+      tSel = null; panel();
+      const c = k === 'c' && db.cristales.find(x => x.id === id); if (!c) return;
       draft.items.push({ tipo: 'cristal', ref: c.id, desc: 'Cristales ' + c.nombre, cant: 1, precio: c.precio });
       $('#csel').value = ''; drawItems();
     };
+    repreciar();
     $('#addo').onclick = () => { draft.items.push({ tipo: 'otro', desc: '', cant: 1, precio: '' }); drawItems(); $$('#itbody [data-k=desc]').pop().focus(); };
     if (p) {
       $('#chp').onclick = () => { draft.pacienteId = ''; draft.medidaId = ''; go('#/nueva-orden'); render(); };
-      $('#msel') && ($('#msel').onchange = e => draft.medidaId = e.target.value);
+      $('#msel') && ($('#msel').onchange = e => {
+        draft.medidaId = e.target.value;
+        if (repreciar()) { toast('Precio de las lunas ajustado a la medida'); drawItems(); }
+        panel();
+      });
       $('#addm').onclick = () => medidaForm(p);
     } else {
       const inp = $('#psearch'), res = $('#pres');
@@ -1376,15 +1430,191 @@ function buscadorMonturas(inp, res, onPick) {
   if (!res.classList.contains('static')) inp.onblur = () => setTimeout(() => { res.hidden = true; }, 200);
 }
 
+// ---------- Lista de precios de lunas ----------
+// Cada lista tiene tratamientos (columnas) y rangos (filas). En la venta se elige sola la primera fila
+// cuyo "esf hasta" y "cil hasta" alcancen la medida del paciente (el ojo con más esfera y más cilindro).
+function tarifasDef() {
+  const R3 = [['I', 6, 2], ['II', 6, 4], ['III', 6, 6]];
+  const R4 = [['I', 6, 2], ['II', 6, 4], ['III', 8, 6], ['F', 20, 6]];
+  const MONO = ['UV', 'AR', 'Blue import', 'Blue', 'Blue foto AR', 'Fotomatic', 'Fotomatic AR'];
+  const C6 = ['UV', 'AR', 'Blue', 'Blue foto AR', 'Foto AR', 'Fotomatic'];
+  const ESP = ['Tessler blue AR', 'Drive AR blue', 'Drive foto blue AR', 'Foto free AR', 'Foto free AR blue'];
+  const t = (id, grupo, nombre, cols, rangos, precios) => ({ id, grupo, nombre, cols, filas: rangos.map(([rango, esf, cil], i) => ({ rango, esf, cil, precios: precios[i] })) });
+  return [
+    t('mono-c39', 'Monofocales', 'Monofocal C-39', MONO, [...R3, ['IIII', 10, 6], ['Combi fábrica', 20, 6]],
+      [[80, 95, 140, 170, 230, 130, 160], [90, 120, 180, 200, 250, 180, 280], [150, 200, 250, 270, 290, 240, 260], [180, 260, 500, 490, 600, 370, 390], [300, 370, 650, 680, 650, 500, 570]]),
+    t('mono-poli', 'Monofocales', 'Monofocal Policarbonato', MONO, R3,
+      [[80, 100, 190, 250, 390, 230, 250], [150, 190, 230, 300, 450, 280, 320], [200, 250, 300, 390, 550, 350, 430]]),
+    t('mono-cristal', 'Monofocales', 'Monofocal Cristal', ['UV', 'AR', 'Foto grey', 'Foto brown'], [...R3, ['Combi fábrica', 20, 6]],
+      [[80, 120, 130, 150], [90, 170, 200, 240], [150, 300, 390, 430], [390, 490, 690, 750]]),
+    t('mono-digital-foto', 'Monofocales', 'Monofocal digital Foto Free', ['Foto free AR', 'Foto free blue AR', 'Foto Driver blue AR', 'Driver blue AR'], [['I', 6, 6]],
+      [[450, 600, 600, 550]]),
+    t('mono-digital-indice', 'Monofocales', 'Monofocal digital por índice', ['AR', 'Blue', 'Foto AR', 'Blue foto AR'], [['Índice 1.49', '', ''], ['Índice 1.61', '', ''], ['Índice 1.67', '', ''], ['Índice 1.74', '', '']],
+      [[310, 430, 470, 520], [480, 570, 600, 660], [540, 630, 660, 720], [630, 720, 780, 840]]),
+    t('mono-tessler', 'Monofocales', 'Tessler deportes (índice 1.60)', ['Blue'], [['I', 6, 2], ['II', 6, 4], ['Combi fábrica', 10, 6]],
+      [[270], [360], [600]]),
+    t('bi-flaptop', 'Bifocales', 'Bifocal Flaptop', C6, R4,
+      [[120, 150, 290, 400, 289, 280], [150, 170, 350, 450, 350, 300], [180, 200, 380, 530, 400, 350], [350, 400, 500, 790, 500, 480]]),
+    t('bi-invisible', 'Bifocales', 'Bifocal Invisible', C6, R4,
+      [[145, 210, 300, 420, 390, 340], [200, 240, 350, 450, 400, 350], [300, 340, 380, 530, 450, 410], [450, 490, 500, 790, 500, 480]]),
+    t('bi-cristal', 'Bifocales', 'Bifocal Cristal', ['UV', 'AR', 'Foto grey', 'Foto grey AR'], R4,
+      [[290, 390, 400, 430], [320, 420, 550, 570], [450, 550, 650, 690], [590, 490, 690, 750]]),
+    t('bi-digital', 'Bifocales', 'Bifocal Digital', C6, R4,
+      [[300, 350, 500, 600, 530, 500], [350, 390, 550, 650, 580, 550], [400, 450, 600, 700, 630, 600], [500, 600, 700, 800, 670, 630]]),
+    t('bi-digital-esp', 'Bifocales', 'Bifocal Digital especial', ESP, R4,
+      [[580, 520, 660, 520, 620], [600, 550, 700, 550, 700], [670, 600, 740, 600, 780], [730, 690, 840, 690, 860]]),
+    t('multi-conv', 'Multifocales', 'Multifocal convencional', C6, R4,
+      [[250, 320, 390, 490, 390, 350], [300, 370, 410, 550, 440, 400], [390, 440, 468, 600, 480, 440], [450, 550, 650, 890, 580, 540]]),
+    t('multi-inicial', 'Multifocales', 'Inicial Free (digital 180°)', C6, R4,
+      [[350, 390, 550, 670, 630, 600], [400, 460, 610, 550, 690, 660], [460, 520, 670, 600, 750, 720], [510, 570, 730, 890, 810, 780]]),
+    t('multi-inicial-esp', 'Multifocales', 'Inicial Free especial', ESP, R4,
+      [[680, 620, 720, 650, 750], [760, 700, 780, 730, 830], [820, 780, 860, 810, 910], [900, 860, 900, 890, 990]]),
+    t('multi-free', 'Multifocales', 'Multi Free (digital 180°)', C6, R4,
+      [[450, 520, 600, 750, 700, 650], [530, 600, 680, 830, 780, 740], [610, 680, 760, 910, 860, 820], [690, 760, 840, 990, 940, 900]]),
+    t('multi-free-esp', 'Multifocales', 'Multi Free especial', ESP, R4,
+      [[780, 680, 830, 730, 830], [780, 760, 910, 810, 910], [860, 840, 990, 890, 920], [940, 920, 1070, 970, 1000]]),
+    t('prem-spektrum', 'Digital Premium 180°', 'Spektrum Hiper', C6, R4,
+      [[840, 880, 990, 1150, 980, 940], [920, 960, 1070, 1230, 1060, 1020], [1000, 1040, 1150, 1310, 1140, 1100], [1080, 1120, 1230, 1390, 1220, 1180]]),
+    t('prem-spektrum-esp', 'Digital Premium 180°', 'Spektrum especial', ESP, R4,
+      [[920, 990, 1150, 1150, 1200], [1000, 1070, 1230, 1100, 1280], [1080, 1150, 1310, 1050, 1360], [1160, 1230, 1390, 1000, 1440]]),
+    t('prem-ergo', 'Digital Premium 180°', 'Ergo Miopía', C6, R4,
+      [[840, 880, 990, 1150, 980, 940], [920, 960, 1070, 1230, 1060, 1020], [1000, 1040, 1150, 1310, 1140, 1100], [1080, 1120, 1230, 1390, 1220, 1180]]),
+    t('prem-ergo-esp', 'Digital Premium 180°', 'Ergo especial', ESP, R4,
+      [[920, 990, 1150, 1150, 1200], [1000, 1070, 1230, 1100, 1280], [1080, 1150, 1310, 1050, 1360], [1160, 1230, 1390, 1000, 1440]]),
+    t('prem-smart', 'Digital Premium 180°', 'Smart', C6, R4,
+      [[900, 980, 1090, 1250, 1180, 1150], [950, 1030, 1140, 1300, 1230, 1200], [1000, 1080, 1190, 1350, 1280, 1250], [1050, 1130, 1240, 1400, 1330, 1300]]),
+    t('prem-smart-esp', 'Digital Premium 180°', 'Smart especial', ESP, R4,
+      [[1000, 1070, 1230, 1230, 1280], [1080, 1150, 1310, 1310, 1360], [1160, 1230, 1390, 1390, 1440], [1240, 1310, 1470, 1470, 1520]]),
+  ];
+}
+const tarifa = id => db.tarifas.find(t => t.id === id);
+const conRango = f => f.esf !== '' && f.esf != null;
+const tieneRangos = t => t.filas.some(conRango);
+const precioTarifa = (t, i, j) => i >= 0 && t.filas[i] ? num(t.filas[i].precios[j]) : 0;
+const n2r = v => num(v).toFixed(2).replace(/\.00$/, '');
+const filaTexto = f => conRango(f) ? `Rango ${f.rango} · esf hasta ±${n2r(f.esf)} · cil hasta −${n2r(f.cil)}` : f.rango;
+const descLuna = (t, i, j) => `Lunas ${t.nombre} · ${t.cols[j]} · ${conRango(t.filas[i]) ? 'rango ' + t.filas[i].rango : t.filas[i].rango}`;
+function gruposTarifa() {
+  const g = new Map(); db.tarifas.forEach(t => { if (!g.has(t.grupo)) g.set(t.grupo, []); g.get(t.grupo).push(t); });
+  return [...g.entries()];
+}
+// Lo más alto de los dos ojos: esfera y cilindro en valor absoluto.
+function potenciaMedida(med) {
+  if (!med) return null;
+  const ojos = [med.od || {}, med.oi || {}];
+  return { esf: Math.max(...ojos.map(o => Math.abs(num(o.esf)))), cil: Math.max(...ojos.map(o => Math.abs(num(o.cil)))) };
+}
+// -1 si la medida pasa todos los rangos (o no hay medida); las filas sin rango se eligen a mano.
+function filaParaMedida(t, med) {
+  const p = potenciaMedida(med); if (!p) return -1;
+  return t.filas.findIndex(f => conRango(f) && p.esf <= num(f.esf) + 1e-9 && p.cil <= num(f.cil) + 1e-9);
+}
+function tarifaForm(t) {
+  const e = t ? JSON.parse(JSON.stringify(t)) : { id: uid(), grupo: '', nombre: '', cols: ['UV', 'AR'], filas: [{ rango: 'I', esf: 6, cil: 2, precios: ['', ''] }] };
+  const grupos = [...new Set(db.tarifas.map(x => x.grupo))];
+  modal({
+    title: t ? 'Editar lista de precios' : 'Nueva lista de precios', wide: true,
+    body: `<form id="tf" class="form"><div class="fg"><label class="f">Grupo<input class="inp" name="grupo" list="tgrupos" required value="${esc(e.grupo)}" placeholder="Ej. Monofocales"><datalist id="tgrupos">${grupos.map(g => `<option value="${esc(g)}">`).join('')}</datalist></label>
+      <label class="f">Nombre<input class="inp" name="nombre" required value="${esc(e.nombre)}" placeholder="Ej. Monofocal C-39"></label></div>
+      <p class="hint" style="margin:0">En la venta se elige sola la primera fila que alcance la medida del paciente (el ojo con más esfera y más cilindro). Deja vacío “Esf hasta” en las filas que se eligen a mano, como las de índice.</p>
+      <div class="tbl-wrap"><table class="tedit" id="tgrid"></table></div>
+      <div class="actions"><button type="button" class="btn sm" id="taddf">${icon('plus')} Fila (rango)</button><button type="button" class="btn sm" id="taddc">${icon('plus')} Tratamiento</button></div></form>`,
+    foot: `${t ? `<button class="btn danger" id="tdel" style="margin-right:auto">${icon('trash')}</button>` : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" form="tf">Guardar</button>`,
+    onMount: bg => {
+      const grid = $('#tgrid', bg);
+      const leer = () => {
+        $$('[data-c]', grid).forEach(i => { e.cols[+i.dataset.c] = i.value.trim(); });
+        $$('[data-f]', grid).forEach(i => { const [r, k, j] = i.dataset.f.split(':'), f = e.filas[+r]; if (k === 'p') f.precios[+j] = i.value.trim(); else f[k] = i.value.trim(); });
+      };
+      const x = a => `<button type="button" class="btn ghost icon sm" ${a} aria-label="Quitar">${icon('x')}</button>`;
+      const pintar = () => {
+        grid.innerHTML = `<thead><tr><th>Rango</th><th>Esf hasta ±</th><th>Cil hasta −</th>${e.cols.map((c, j) => `<th><div class="row" style="gap:2px"><input class="inp sm" data-c="${j}" value="${esc(c)}" placeholder="Tratamiento">${x(`data-xc="${j}"`)}</div></th>`).join('')}<th></th></tr></thead>
+          <tbody>${e.filas.map((f, r) => `<tr><td><input class="inp sm" data-f="${r}:rango" value="${esc(f.rango)}"></td><td><input class="inp sm" data-f="${r}:esf" inputmode="decimal" value="${esc(f.esf)}"></td><td><input class="inp sm" data-f="${r}:cil" inputmode="decimal" value="${esc(f.cil)}"></td>
+            ${e.cols.map((_, j) => `<td><input class="inp sm num" data-f="${r}:p:${j}" inputmode="decimal" value="${esc(f.precios[j] ?? '')}"></td>`).join('')}<td>${x(`data-xf="${r}"`)}</td></tr>`).join('')}</tbody>`;
+      };
+      grid.addEventListener('click', ev => {
+        const c = ev.target.closest('[data-xc]'), f = ev.target.closest('[data-xf]'); if (!c && !f) return;
+        leer();
+        if (c) { const j = +c.dataset.xc; e.cols.splice(j, 1); e.filas.forEach(r => r.precios.splice(j, 1)); }
+        else e.filas.splice(+f.dataset.xf, 1);
+        pintar();
+      });
+      $('#taddf', bg).onclick = () => { leer(); const u = e.filas[e.filas.length - 1]; e.filas.push({ rango: '', esf: u ? u.esf : '', cil: u ? u.cil : '', precios: e.cols.map(() => '') }); pintar(); };
+      $('#taddc', bg).onclick = () => { leer(); e.cols.push(''); e.filas.forEach(r => r.precios.push('')); pintar(); $$('[data-c]', grid).pop().focus(); };
+      pintar();
+      $('#tf', bg).onsubmit = ev => {
+        ev.preventDefault(); leer();
+        const f = readForm(ev.target);
+        if (!e.cols.length || e.cols.some(c => !c)) return toast('Ponle nombre a cada tratamiento');
+        if (!e.filas.length) return toast('Agrega al menos una fila');
+        e.grupo = f.grupo; e.nombre = f.nombre;
+        e.filas = e.filas.map(r => ({ rango: r.rango || '—', esf: String(r.esf).trim() === '' ? '' : num(r.esf), cil: String(r.cil).trim() === '' ? (String(r.esf).trim() === '' ? '' : 0) : num(r.cil), precios: r.precios.map(p => String(p).trim() === '' ? '' : num(p)) }));
+        if (t) Object.assign(t, e); else db.tarifas.push(e);
+        addLog(`Lista de precios "${e.nombre}" ${t ? 'modificada' : 'creada'}`, [dueno().id]);
+        save(); closeModal(); toast('Lista de precios guardada'); render();
+      };
+      $('#tdel', bg) && ($('#tdel', bg).onclick = () => confirmBox(`¿Eliminar la lista "${esc(t.nombre)}"?`, () => { db.tarifas = db.tarifas.filter(x => x !== t); addLog(`Lista de precios "${t.nombre}" eliminada`, [dueno().id]); save(); render(); }, 'Eliminar'));
+    },
+  });
+}
+
+// ---------- Clave del dueño ----------
+// Ajustes y la lista de precios solo se abren con la clave del dueño; solo él la puede cambiar.
+let ajustesAbierto = false;
+const dueno = () => socio(db.config.duenoId) || db.config.socios.find(s => /jorge/i.test(s.nombre)) || db.config.socios[0];
+const soyDueno = () => dueno()?.id === user;
+function pideDueno(motivo, cb) {
+  const d = dueno();
+  if (!db.config.claveDueno) { if (soyDueno()) crearClaveDueno(cb); else toast(`Primero ${d.nombre} tiene que crear su clave de dueño`); return; }
+  modal({
+    title: 'Clave del dueño',
+    body: `<div class="lock-note">${icon('lock')}<div><b>${esc(motivo)}</b><br>Necesita la clave de dueño de ${esc(d.nombre)}.</div></div>
+      <div class="form"><label class="f">Clave de dueño<input class="inp pin" id="dpin" type="password" inputmode="numeric" autocomplete="off" maxlength="8"></label><div class="err" id="dperr"></div></div>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="dpok">${icon('unlock')} Continuar</button>`,
+    onMount: bg => {
+      const ok = () => {
+        if (hashPin($('#dpin', bg).value) !== db.config.claveDueno) { $('#dperr', bg).textContent = 'Clave incorrecta'; $('#dpin', bg).select(); return; }
+        closeModal(); addLog(motivo, [d.id]); save(); cb();
+      };
+      $('#dpok', bg).onclick = ok; $('#dpin', bg).addEventListener('keydown', ev => ev.key === 'Enter' && ok());
+    },
+  });
+}
+// La primera vez el dueño confirma con su clave de socio y elige su clave de dueño.
+function crearClaveDueno(cb, cambiar) {
+  const d = dueno();
+  modal({
+    title: cambiar ? 'Cambiar clave de dueño' : 'Crea tu clave de dueño',
+    body: `<form id="cdf" class="form"><p class="muted small" style="margin:0">Esta clave es solo tuya, ${esc(d.nombre)}: abre Ajustes y permite cambiar la lista de precios. Nadie más puede cambiarla.</p>
+      <label class="f">${cambiar ? 'Clave de dueño actual' : 'Tu clave de socio (la que usas para entrar)'}<input class="inp pin" name="actual" type="password" inputmode="numeric" autocomplete="off" maxlength="8" required></label>
+      <label class="f">Nueva clave de dueño <span class="hint">(4 a 8 números)</span><input class="inp pin" name="nueva" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" required></label>
+      <label class="f">Repite la nueva clave<input class="inp pin" name="rep" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" required></label>
+      <div class="err" id="cderr"></div></form>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="cdf">${icon('lock')} Guardar clave</button>`,
+    onMount: bg => {
+      $('#cdf', bg).onsubmit = ev => {
+        ev.preventDefault();
+        const f = readForm(ev.target), err = m => { $('#cderr', bg).textContent = m; };
+        if (hashPin(f.actual) !== (cambiar ? db.config.claveDueno : d.pin)) return err(cambiar ? 'La clave de dueño actual no es correcta' : 'Tu clave de socio no es correcta');
+        if (!/^\d{4,8}$/.test(f.nueva)) return err('La nueva clave debe tener de 4 a 8 números');
+        if (f.nueva !== f.rep) return err('Las dos claves nuevas no son iguales');
+        db.config.claveDueno = hashPin(f.nueva); db.config.duenoId = d.id;
+        addLog(cambiar ? 'Clave de dueño cambiada' : 'Clave de dueño creada', [d.id]);
+        save(); closeModal(); toast('Clave de dueño guardada'); cb ? cb() : render();
+      };
+    },
+  });
+}
+
 // ---------- Inventario ----------
 let invTab = 'monturas';
 routes.inventario = {
   html() {
     const bajo = db.monturas.filter(m => num(m.stock) <= 1).length;
     return `<div class="page-head"><div><h1>Inventario</h1><p>${db.monturas.length} monturas · ${db.monturas.reduce((s, m) => s + Math.max(0, num(m.stock)), 0)} unidades${bajo ? ` · <span style="color:var(--danger)">${bajo} con stock bajo</span>` : ''}</p></div>
-      <div class="actions">${invTab === 'monturas' ? `<button class="btn accent" id="ingreso">${icon('box')} Llegó mercadería</button>` : ''}<button class="btn primary" id="newi">${icon('plus')} ${invTab === 'monturas' ? 'Nueva montura' : 'Nuevo cristal'}</button></div></div>
-      <div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="iseg"><button data-k="monturas" class="${invTab === 'monturas' ? 'on' : ''}">Monturas</button><button data-k="cristales" class="${invTab === 'cristales' ? 'on' : ''}">Lista de precios de cristales</button></div>
-      <input class="inp" id="if" style="flex:1;min-width:200px" placeholder="${invTab === 'monturas' ? 'Buscar varilla, marca, sigla o código…' : 'Buscar…'}"></div><div id="ilist"></div></div>`;
+      <div class="actions">${invTab === 'monturas' ? `<button class="btn accent" id="ingreso">${icon('box')} Llegó mercadería</button>` : ''}<button class="btn primary" id="newi">${icon('plus')} ${invTab === 'monturas' ? 'Nueva montura' : 'Nueva lista'}</button></div></div>
+      <div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="iseg"><button data-k="monturas" class="${invTab === 'monturas' ? 'on' : ''}">Monturas</button><button data-k="cristales" class="${invTab === 'cristales' ? 'on' : ''}">Lista de precios de lunas</button></div>
+      <input class="inp" id="if" style="flex:1;min-width:200px" placeholder="${invTab === 'monturas' ? 'Buscar varilla, marca, sigla o código…' : 'Buscar tipo de luna o tratamiento…'}"></div><div id="ilist"></div></div>`;
   },
   bind() {
     const draw = () => {
@@ -1397,15 +1627,27 @@ routes.inventario = {
         $$('#ilist [data-id]').forEach(r => r.onclick = e => { if (!e.target.closest('[data-add]')) monturaForm(db.monturas.find(x => x.id === r.dataset.id)); });
         $$('#ilist [data-add]').forEach(b => b.onclick = () => stockForm(db.monturas.find(x => x.id === b.dataset.add)));
       } else {
-        const l = db.cristales.filter(c => !f || [c.nombre, c.tipo].join(' ').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().includes(f));
-        $('#ilist').innerHTML = l.length ? `<div class="tbl-wrap"><table><thead><tr><th>Cristal</th><th class="hide-sm">Tipo</th><th class="r">Precio</th></tr></thead><tbody>
-          ${l.map(c => `<tr class="link" data-id="${c.id}"><td><b>${esc(c.nombre)}</b></td><td class="hide-sm">${esc(c.tipo || '—')}</td><td class="r num">${money(c.precio)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">No hay cristales en la lista.</div>`;
+        const ts = db.tarifas.filter(t => !f || sinTilde([t.grupo, t.nombre, ...t.cols].join(' ')).includes(f));
+        const l = db.cristales.filter(c => !f || sinTilde([c.nombre, c.tipo].join(' ')).includes(f));
+        const tabla = t => `<div class="tarifa"><div class="row between" style="gap:8px"><b>${esc(t.nombre)}</b><button class="btn sm" data-edt="${t.id}">${icon('lock')} Editar</button></div>
+          <div class="tbl-wrap"><table class="tprec"><thead><tr><th>Rango</th>${t.cols.map(c => `<th class="r">${esc(c)}</th>`).join('')}</tr></thead><tbody>
+          ${t.filas.map(r => `<tr><td><b>${esc(r.rango)}</b>${conRango(r) ? `<div class="muted small">esf ±${n2r(r.esf)} · cil −${n2r(r.cil)}</div>` : ''}</td>${t.cols.map((_, j) => `<td class="r num">${num(r.precios[j]) ? money(r.precios[j]) : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`;
+        const grupos = [...new Set(ts.map(t => t.grupo))];
+        $('#ilist').innerHTML = `<div class="card-b" style="padding-top:4px">
+          <p class="muted small" style="margin:0 0 12px">En la venta el precio se pone solo según la medida del paciente: se toma el ojo con más esfera y más cilindro y se busca el primer rango que lo cubre. Cambiar precios pide la clave del dueño.</p>
+          ${grupos.map(g => `<h3 class="tgrupo">${esc(g)}</h3>${ts.filter(t => t.grupo === g).map(tabla).join('')}`).join('') || (f ? '' : `<div class="empty">No hay listas de precios.</div>`)}
+          <h3 class="tgrupo">Otros cristales (precio fijo)</h3>
+          ${l.length ? `<div class="tbl-wrap"><table><thead><tr><th>Cristal</th><th class="hide-sm">Tipo</th><th class="r">Precio</th></tr></thead><tbody>
+          ${l.map(c => `<tr class="link" data-id="${c.id}"><td><b>${esc(c.nombre)}</b></td><td class="hide-sm">${esc(c.tipo || '—')}</td><td class="r num">${money(c.precio)}</td></tr>`).join('')}</tbody></table></div>` : `<p class="muted small">No hay cristales de precio fijo.</p>`}
+          <button class="btn sm mt-s" id="newc">${icon('plus')} Cristal de precio fijo</button></div>`;
         $$('#ilist [data-id]').forEach(r => r.onclick = () => cristalForm(db.cristales.find(x => x.id === r.dataset.id)));
+        $$('#ilist [data-edt]').forEach(b => b.onclick = () => { const t = tarifa(b.dataset.edt); pideDueno(`Editar lista de precios "${t.nombre}"`, () => tarifaForm(t)); });
+        $('#newc').onclick = () => cristalForm();
       }
     };
     $$('#iseg button').forEach(b => b.onclick = () => { invTab = b.dataset.k; render(); });
     $('#if').oninput = draw; draw();
-    $('#newi').onclick = () => invTab === 'monturas' ? monturaForm() : cristalForm();
+    $('#newi').onclick = () => invTab === 'monturas' ? monturaForm() : pideDueno('Crear una lista de precios de lunas', () => tarifaForm());
     $('#ingreso') && ($('#ingreso').onclick = () => ingresoForm());
   },
 };
@@ -1566,9 +1808,10 @@ function cristalForm(c) {
       $('#cf2', bg).onsubmit = ev => {
         ev.preventDefault(); const f = readForm(ev.target); f.precio = num(f.precio);
         const doit = () => { if (c) Object.assign(c, f); else db.cristales.push({ id: uid(), ...f }); save(); closeModal(); toast('Guardado'); render(); };
-        c && num(c.precio) !== f.precio ? dual(`Cambiar precio de "${c.nombre}": ${money(c.precio)} → ${money(f.precio)}`, doit) : doit();
+        !c ? pideDueno(`Agregar cristal "${f.nombre}" a ${money(f.precio)}`, doit)
+          : num(c.precio) !== f.precio ? pideDueno(`Cambiar precio de "${c.nombre}": ${money(c.precio)} → ${money(f.precio)}`, doit) : doit();
       };
-      $('#cdel', bg) && ($('#cdel', bg).onclick = () => dual(`Eliminar cristal "${c.nombre}"`, () => { db.cristales = db.cristales.filter(x => x !== c); save(); render(); }));
+      $('#cdel', bg) && ($('#cdel', bg).onclick = () => pideDueno(`Eliminar cristal "${c.nombre}"`, () => { db.cristales = db.cristales.filter(x => x !== c); save(); render(); }));
     },
   });
 }
@@ -1615,8 +1858,15 @@ routes.recordatorios = {
 // ---------- Ajustes ----------
 routes.ajustes = {
   html() {
-    const c = db.config, F = c.fact;
-    return `<div class="page-head"><div><h1>Ajustes</h1><p>Datos de la óptica, socios y respaldo.</p></div></div>
+    const c = db.config, F = c.fact, d = dueno();
+    if (!ajustesAbierto) return `<div class="page-head"><div><h1>Ajustes</h1><p>Protegido con la clave del dueño.</p></div></div>
+      <div class="card" style="max-width:460px"><div class="card-b">
+        <div class="lock-note">${icon('lock')}<div>Ajustes, las claves y el respaldo solo los maneja <b>${esc(d.nombre)}</b>.</div></div>
+        ${c.claveDueno ? `<form id="ajf" class="form"><label class="f">Clave de dueño<input class="inp pin" id="ajpin" type="password" inputmode="numeric" autocomplete="off" maxlength="8" required></label><div class="err" id="ajerr"></div>
+          <button class="btn primary">${icon('unlock')} Abrir Ajustes</button></form>`
+        : soyDueno() ? `<p class="muted small" style="margin-top:0">Todavía no tienes clave de dueño. Créala ahora: con ella se abre Ajustes y se cambia la lista de precios.</p><button class="btn primary" id="ajcrear">${icon('lock')} Crear mi clave de dueño</button>`
+          : `<p class="muted small" style="margin:0">${esc(d.nombre)} tiene que entrar con su usuario y crear su clave de dueño.</p>`}</div></div>`;
+    return `<div class="page-head"><div><h1>Ajustes</h1><p>Datos de la óptica, socios y respaldo.</p></div><div class="actions"><button class="btn" id="ajlock">${icon('lock')} Cerrar Ajustes</button></div></div>
       <div class="grid g2">
         <div class="card"><div class="card-h"><h3>Datos de la óptica</h3></div><div class="card-b"><form id="cfg" class="form">
           <label class="f">Nombre<input class="inp" name="nombre" value="${esc(c.nombre)}" required></label>
@@ -1663,6 +1913,9 @@ routes.ajustes = {
         <div class="card"><div class="card-h"><h3>Socios</h3></div><div class="card-b">
           ${c.socios.map(s => `<div class="row between" style="padding:10px 0;border-bottom:1px solid var(--line-2)"><div class="row"><span class="avatar">${initials(s.nombre)}</span><div><b>${esc(s.nombre)}</b><div class="muted small">${s.pct}% de la ganancia</div></div></div><button class="btn sm" data-s="${s.id}">Editar</button></div>`).join('')}
           <p class="hint">Cambiar nombres, porcentajes o claves pide la clave de ambos socios.</p></div></div>
+        <div class="card"><div class="card-h"><h3>Clave del dueño</h3></div><div class="card-b">
+          <p class="muted small" style="margin-top:0">Es de <b>${esc(d.nombre)}</b>. Abre Ajustes y permite cambiar la lista de precios de lunas. Solo se cambia sabiendo la clave actual.</p>
+          <button class="btn" id="cdcambiar">${icon('lock')} Cambiar clave de dueño</button></div></div>
         <div class="card"><div class="card-h"><h3>Respaldo de datos</h3></div><div class="card-b">
           <p class="muted small" style="margin-top:0">Los datos se guardan en este equipo. Descarga un respaldo cada semana (o guárdalo en Google Drive) para no perder nada.</p>
           <div class="actions"><button class="btn primary" id="exp">${icon('down')} Descargar respaldo</button><label class="btn">${icon('up')} Restaurar respaldo<input type="file" id="imp" accept=".json,application/json" hidden></label></div>
@@ -1674,6 +1927,17 @@ routes.ajustes = {
       </div>`;
   },
   bind() {
+    if (!ajustesAbierto) {
+      $('#ajcrear') && ($('#ajcrear').onclick = () => crearClaveDueno(() => { ajustesAbierto = true; render(); }));
+      $('#ajf') && ($('#ajf').onsubmit = e => {
+        e.preventDefault();
+        if (hashPin($('#ajpin').value) !== db.config.claveDueno) { $('#ajerr').textContent = 'Clave incorrecta'; $('#ajpin').select(); return; }
+        ajustesAbierto = true; render();
+      });
+      return;
+    }
+    $('#ajlock').onclick = () => { ajustesAbierto = false; render(); };
+    $('#cdcambiar').onclick = () => crearClaveDueno(null, true);
     $('#cfg').onsubmit = e => { e.preventDefault(); const f = readForm(e.target); Object.assign(db.config, f, { recordatorioMeses: num(f.recordatorioMeses) || 12 }); save(); toast('Datos guardados'); render(); };
     $$('[data-s]').forEach(b => b.onclick = () => dual('Editar datos de socio', () => socioForm(socio(b.dataset.s))));
     $('#factf').onsubmit = e => {
@@ -1714,8 +1978,8 @@ routes.ajustes = {
       const ok = await saveFile(`respaldo-${(db.config.nombre || 'optica').toLowerCase().replace(/\s+/g, '-')}-${hoy()}.json`, JSON.stringify(db));
       if (ok) { db.config.ultimoRespaldo = Date.now(); save(); render(); }
     };
-    $('#reset').onclick = () => dual('Borrar pacientes, órdenes, caja e inventario (se conservan los socios y los datos de la óptica)', () => {
-      const cfg = { ...db.config, nextOrden: 1, nextMontura: 1, fact: { ...db.config.fact, numB: 1, numF: 1 } }; db = blank(); db.config = cfg; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
+    $('#reset').onclick = () => dual('Borrar pacientes, órdenes, caja e inventario (se conservan los socios, los datos de la óptica y la lista de precios de lunas)', () => {
+      const cfg = { ...db.config, nextOrden: 1, nextMontura: 1, fact: { ...db.config.fact, numB: 1, numF: 1 } }, tar = db.tarifas; db = blank(); db.config = cfg; db.tarifas = tar; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
     });
     $('#imp').onchange = e => {
       const file = e.target.files[0]; if (!file) return;
@@ -1802,7 +2066,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.23.4';
+const APP_VERSION = '2026.09.23.5';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
