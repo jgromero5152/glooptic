@@ -982,12 +982,12 @@ async function comprobantePDF(c) {
   const { jsPDF } = await loadJsPDF();
   const F = fact();
   if (F.formato === 'ticket') {
-    const h = drawTicket(new jsPDF({ unit: 'mm', format: [80, 1500] }), c, F);
-    const doc = new jsPDF({ unit: 'mm', format: [80, Math.max(h + 6, 90)] });
+    const h = drawTicket(new jsPDF({ compress: true, unit: 'mm', format: [80, 1500] }), c, F);
+    const doc = new jsPDF({ compress: true, unit: 'mm', format: [80, Math.max(h + 6, 90)] });
     drawTicket(doc, c, F);
     return doc.output('blob');
   }
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const doc = new jsPDF({ compress: true, unit: 'mm', format: 'a4' });
   drawA4(doc, c, F);
   return doc.output('blob');
 }
@@ -1016,7 +1016,7 @@ function drawA4(doc, c, F) {
   let y = 14, tx = M;
   if (F.logo) {
     const r = F.logoRatio || 1, lw = r >= 1.6 ? 38 : 26, lh = Math.min(26, lw / r);
-    try { doc.addImage(F.logo, 'PNG', M, y, lh * r, lh); tx = M + lh * r + 5; } catch (e) { }
+    try { doc.addImage(F.logo, 'PNG', M, y, lh * r, lh, 'logo', 'FAST'); tx = M + lh * r + 5; } catch (e) { }
   }
   pdfText(doc, db.config.nombre || F.razon, tx, y + 6, { b: 1, s: 16 });
   let ey = y + 12;
@@ -1100,7 +1100,7 @@ function drawTicket(doc, c, F) {
   const center = (t, o = {}) => doc.splitTextToSize(String(t), W - 2 * M).forEach(s => { pdfText(doc, s, X, y, { ...o, a: 'center' }); y += (o.s || 7.5) * 0.45; });
   const sep = () => { y += 1; doc.setLineDashPattern([0.8, 0.8], 0); doc.setDrawColor(150, 150, 150); doc.line(M, y, R, y); doc.setLineDashPattern([], 0); y += 4; };
   const fila = (l, v, o = {}) => { o = { s: 7.5, ...o }; pdfText(doc, l, M, y, o); pdfText(doc, v, R, y, { ...o, a: 'right' }); y += o.s * 0.48; };
-  if (F.logo) { const r = F.logoRatio || 1, h = Math.min(16, 30 / r); try { doc.addImage(F.logo, 'PNG', X - h * r / 2, y, h * r, h); y += h + 4; } catch (e) { } }
+  if (F.logo) { const r = F.logoRatio || 1, h = Math.min(16, 30 / r); try { doc.addImage(F.logo, 'PNG', X - h * r / 2, y, h * r, h, 'logo', 'FAST'); y += h + 4; } catch (e) { } }
   center(db.config.nombre || F.razon, { b: 1, s: 11 }); y += 0.5;
   emisorLineas(F).forEach(l => center(l, { s: 7.5, c: PDF_GRAY }));
   if (F.ruc) center('R.U.C. ' + F.ruc, { b: 1, s: 8.5 });
