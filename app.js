@@ -82,19 +82,32 @@ const I = {
 const icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${I[n] || ''}</svg>`;
 
 // ---------- Datos ----------
+const FACT_DEF = () => ({
+  ruc: '', razon: '', direccion: '', distrito: '', provincia: '', departamento: '', email: '', web: '',
+  igv: true, igvPct: 18, serieB: 'B001', numB: 1, serieF: 'F001', numF: 1, formato: 'A4', medida: true,
+  pie: 'Gracias por su preferencia. Presente este documento para recoger sus lentes.', cuentas: '', logo: '', logoRatio: 1,
+});
 let db = load();
 let user = null;
 try { user = sessionStorage.getItem(SESSION); } catch (e) { }
 
 function blank() {
   return {
-    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, socios: [] },
-    pacientes: [], medidas: [], monturas: [], cristales: [], ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [],
+    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, socios: [], fact: FACT_DEF() },
+    pacientes: [], medidas: [], monturas: [], cristales: [], ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [], comprobantes: [],
   };
 }
 function load() {
-  try { const r = localStorage.getItem(KEY); if (r) return Object.assign(blank(), JSON.parse(r)); } catch (e) { }
+  try { const r = localStorage.getItem(KEY); if (r) return normDb(Object.assign(blank(), JSON.parse(r))); } catch (e) { }
   return null;
+}
+// Completa los datos guardados con versiones anteriores del sistema.
+function normDb(d) {
+  d.config.fact = Object.assign(FACT_DEF(), d.config.fact || {});
+  if (!d.config.fact.ruc && d.config.ruc) d.config.fact.ruc = d.config.ruc;
+  if (!d.config.fact.direccion && d.config.direccion) d.config.fact.direccion = d.config.direccion;
+  d.comprobantes = d.comprobantes || [];
+  return d;
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('No se pudo guardar: ' + e.message); }
@@ -294,6 +307,7 @@ function bindSetup() {
     const f = readForm(e.target);
     db = blank();
     Object.assign(db.config, { nombre: f.nombre, telefono: f.telefono, ruc: f.ruc, direccion: f.direccion });
+    Object.assign(db.config.fact, { ruc: f.ruc, direccion: f.direccion });
     db.config.socios = [{ id: 's1', nombre: f.s1, pin: hashPin(f.p1), pct: 50 }, { id: 's2', nombre: f.s2, pin: hashPin(f.p2), pct: 50 }];
     if (f.demo) seedDemo();
     save(); render();
@@ -643,6 +657,7 @@ routes['nueva-orden'] = {
             <div class="row between"><span class="muted">Resta</span><b class="num" id="tresta" style="font-size:18px">S/ 0.00</b></div>
             <label class="f">Fecha de entrega<input class="inp" type="date" name="entrega" value="${esc(draft.entrega)}"></label>
             <label class="f">Notas para el laboratorio<textarea class="inp" name="notas" placeholder="Tipo de armado, altura, observaciones…">${esc(draft.notas)}</textarea></label>
+            <label class="f">Comprobante<select class="inp" name="cptipo">${[['nota', 'Nota de venta'], ['boleta', 'Boleta de venta'], ['factura', 'Factura'], ['', 'Ninguno por ahora']].map(([v, t]) => `<option value="${v}" ${v === (fact().ruc ? 'boleta' : 'nota') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
             <button class="btn primary" style="padding:13px">${icon('check')} Registrar venta</button>
           </form></div></div>
       </div>`;
@@ -708,6 +723,7 @@ routes['nueva-orden'] = {
       if (ab > 0) db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto: round2(ab), metodo: f.metodo, por: user, ts: Date.now(), tipo: 'abono' });
       items.filter(i => i.tipo === 'montura').forEach(i => { const m = db.monturas.find(x => x.id === i.ref); if (m) m.stock = num(m.stock) - i.cant; });
       save(); draft = null; toast(`Orden N° ${pad(o.numero)} registrada`); go('#/orden/' + o.id);
+      if (f.cptipo) emitirForm(o, f.cptipo);
     };
     drawItems();
   },
@@ -726,19 +742,19 @@ routes.orden = {
     const o = orden(id);
     if (!o) return `<div class="empty">Orden no encontrada. <a class="strong" href="#/ordenes">Volver</a></div>`;
     const p = paciente(o.pacienteId), m = db.medidas.find(x => x.id === o.medidaId);
-    const tot = totalOrden(o), pag = pagadoOrden(o), sal = round2(tot - pag), pagos = pagosDe(o.id);
+    const tot = totalOrden(o), pag = pagadoOrden(o), sal = round2(tot - pag), pagos = pagosDe(o.id), cp = comprobanteDe(o.id);
     return `<a class="crumb" href="#/ordenes">${icon('back')} Órdenes</a>
       <div class="page-head"><div><h1>Orden N° ${pad(o.numero)}</h1><p>${fdate(o.fecha, { day: 'numeric', month: 'long', year: 'numeric' })} · Atendió ${esc(socioName(o.por))}</p></div>
-        <div class="actions"><button class="btn" id="oprint">${icon('file')} Nota de venta</button>${p?.telefono ? `<a class="btn wa" id="owa" target="_blank" rel="noopener" href="${waLink(p.telefono, ordenWaTexto(o, p))}">${icon('wa')} ${o.estado === 'listo' ? 'Avisar que está listo' : 'WhatsApp'}</a>` : ''}
+        <div class="actions"><button class="btn ${cp ? '' : 'primary'}" id="ocp">${icon('file')} ${cp ? `${TIPOS_CP[cp.tipo]} ${esc(cpNum(cp))}` : 'Boleta / Factura'}</button>${p?.telefono ? `<a class="btn wa" id="owa" target="_blank" rel="noopener" href="${waLink(p.telefono, ordenWaTexto(o, p))}">${icon('wa')} ${o.estado === 'listo' ? 'Avisar que está listo' : 'WhatsApp'}</a>` : ''}
         <button class="btn ghost icon" id="odel" title="Anular orden">${icon('trash')}</button></div></div>
       <div class="card card-b" style="margin-bottom:18px"><div class="row between wrap"><div class="row wrap"><span class="muted small strong">ESTADO</span>
         <div class="seg" id="est">${Object.entries(ESTADOS).map(([k, [t]]) => `<button data-e="${k}" class="${o.estado === k ? 'on' : ''}">${t}</button>`).join('')}</div></div>
         <div class="row">${o.entrega ? `<span class="muted small">Entrega: <b>${fdate(o.entrega)}</b></span>` : ''}${o.entregado ? `<span class="muted small">· Entregado ${fdate(o.entregado)}</span>` : ''}</div></div></div>
       <div class="split">
         <div class="grid" style="gap:18px">
-          <div class="card"><div class="card-h"><h3>Detalle</h3><button class="btn sm ghost" id="oedit">${icon('edit')} Corregir</button></div><div class="card-b"><div class="tbl-wrap"><table><thead><tr><th>Producto</th><th class="c">Cant.</th><th class="r">Precio</th><th class="r">Subtotal</th></tr></thead>
-            <tbody>${o.items.map(i => `<tr><td>${esc(i.desc)}</td><td class="c">${i.cant}</td><td class="r num">${money(i.precio)}</td><td class="r num">${money(i.cant * i.precio)}</td></tr>`).join('')}</tbody>
-            <tfoot>${o.descuento ? `<tr><td colspan="3" class="r muted" style="font-weight:500">Descuento</td><td class="r num">− ${money(o.descuento)}</td></tr>` : ''}<tr><td colspan="3" class="r">Total</td><td class="r num">${money(tot)}</td></tr></tfoot></table></div>
+          <div class="card"><div class="card-h"><h3>Detalle</h3><button class="btn sm ghost" id="oedit">${icon('edit')} Corregir</button></div><div class="card-b"><div class="tbl-wrap"><table><thead><tr><th>Producto</th><th class="c">Cant.</th><th class="r hide-sm">Precio</th><th class="r">Subtotal</th></tr></thead>
+            <tbody>${o.items.map(i => `<tr><td>${esc(i.desc)}</td><td class="c">${i.cant}</td><td class="r num hide-sm">${money(i.precio)}</td><td class="r num">${money(i.cant * i.precio)}</td></tr>`).join('')}</tbody>
+            <tfoot>${o.descuento ? `<tr><td colspan="2" class="r muted" style="font-weight:500">Descuento</td><td class="hide-sm"></td><td class="r num">− ${money(o.descuento)}</td></tr>` : ''}<tr><td colspan="2" class="r">Total</td><td class="hide-sm"></td><td class="r num">${money(tot)}</td></tr></tfoot></table></div>
             ${o.notas ? `<div class="small mt"><span class="muted">Notas:</span> ${esc(o.notas)}</div>` : ''}</div></div>
           <div class="card"><div class="card-h"><h3>Medida</h3>${p ? `<a class="btn sm ghost" href="#/paciente/${p.id}">Ver historial</a>` : ''}</div><div class="card-b">${m ? `<div class="muted small" style="margin-bottom:10px">Examen del ${fdate(m.fecha)} · DIP ${esc(m.dip || '—')}${m.altura ? ' · Altura ' + esc(m.altura) : ''}${m.lente ? ' · ' + esc(m.lente) : ''}</div>${rxTable(m)}` : `<div class="empty" style="padding:14px">Venta sin medida asociada.</div>`}</div></div>
         </div>
@@ -774,7 +790,7 @@ routes.orden = {
       o.items.filter(i => i.tipo === 'montura').forEach(i => { const m = db.monturas.find(x => x.id === i.ref); if (m) m.stock = num(m.stock) + i.cant; });
       db.pagos = db.pagos.filter(x => x.ordenId !== o.id); db.ordenes = db.ordenes.filter(x => x !== o); save(); toast('Orden anulada'); go('#/ordenes');
     });
-    $('#oprint').onclick = () => verNota(o);
+    $('#ocp').onclick = () => { const cp = comprobanteDe(o.id); cp ? comprobanteView(cp) : emitirForm(o); };
     $('#owa') && ($('#owa').onclick = () => { if (o.estado === 'listo') { o.avisado = hoy(); save(); } });
   },
 };
@@ -823,33 +839,313 @@ function ordenWaTexto(o, p) {
   if (o.estado === 'listo') return `Hola ${n} 👋, te escribimos de *${db.config.nombre}*. ¡Tus lentes ya están listos! 👓\n\nOrden N° ${pad(o.numero)}${s > 0.009 ? `\nSaldo pendiente: ${money(s)}` : ''}\n\nTe esperamos para entregártelos.${db.config.direccion ? '\n📍 ' + db.config.direccion : ''}`;
   return `Hola ${n} 👋, te escribimos de *${db.config.nombre}*.\n\n*Orden N° ${pad(o.numero)}* — ${fdate(o.fecha)}\n${o.items.map(i => `• ${i.desc}: ${money(i.cant * i.precio)}`).join('\n')}\n\nTotal: ${money(totalOrden(o))}\nA cuenta: ${money(pagadoOrden(o))}\nSaldo: ${money(Math.max(0, s))}${o.entrega ? `\nEntrega: ${fdate(o.entrega, { weekday: 'long', day: 'numeric', month: 'long' })}` : ''}\n\n¡Gracias por tu compra!`;
 }
-const NOTA_CSS = `body{font:13px/1.45 Inter,Segoe UI,Arial,sans-serif;color:#14263f;margin:24px}.nota{max-width:720px;margin:0 auto}h2{font:600 22px Georgia,serif;margin:0}.hd{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #14263f;padding-bottom:10px;margin-bottom:12px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{padding:6px 8px;border-bottom:1px solid #ddd;text-align:left}th{font-size:11px;text-transform:uppercase;color:#6c7689}.r{text-align:right}.c{text-align:center}.rx td,.rx th{text-align:center}.rx td:first-child,.rx th:first-child{text-align:left;font-weight:700}.totals{display:grid;gap:4px;min-width:240px}.totals div{display:flex;justify-content:space-between;gap:20px}@media print{body{margin:0}}`;
-function notaHTML(o) {
-  const p = paciente(o.pacienteId), m = db.medidas.find(x => x.id === o.medidaId), c = db.config;
-  return `<div class="nota"><div class="hd"><div><h2>${esc(c.nombre)}</h2><div>${[c.ruc && 'RUC ' + c.ruc, c.direccion, c.telefono].filter(Boolean).map(esc).join(' · ')}</div></div>
-    <div style="text-align:right"><b style="font-size:16px">NOTA DE VENTA</b><br>Orden N° ${pad(o.numero)}<br>${fdate(o.fecha)}</div></div>
-    <div><b>Cliente:</b> ${esc(p?.nombre)} ${p?.dni ? ' · DNI ' + esc(p.dni) : ''} ${p?.telefono ? ' · Tel. ' + esc(p.telefono) : ''}</div>
-    ${m ? `<div style="margin-top:10px"><b>Medida</b> (examen del ${fdate(m.fecha)}${m.dip ? ', DIP ' + esc(m.dip) + ' mm' : ''}${m.altura ? ', altura ' + esc(m.altura) + ' mm' : ''})</div>${rxTable(m)}` : ''}
-    <table><thead><tr><th>Descripción</th><th class="c">Cant.</th><th class="r">P. unit.</th><th class="r">Importe</th></tr></thead><tbody>${o.items.map(i => `<tr><td>${esc(i.desc)}</td><td class="c">${i.cant}</td><td class="r">${money(i.precio)}</td><td class="r">${money(i.cant * i.precio)}</td></tr>`).join('')}</tbody></table>
-    <div style="display:flex;justify-content:flex-end;margin-top:10px"><div class="totals">${o.descuento ? `<div><span>Descuento</span><span>− ${money(o.descuento)}</span></div>` : ''}<div><b>Total</b><b>${money(totalOrden(o))}</b></div><div><span>A cuenta</span><span>${money(pagadoOrden(o))}</span></div><div><b>Saldo</b><b>${money(Math.max(0, saldoOrden(o)))}</b></div></div></div>
-    ${o.entrega ? `<div style="margin-top:12px"><b>Fecha de entrega:</b> ${fdate(o.entrega, { weekday: 'long', day: 'numeric', month: 'long' })}</div>` : ''}
-    ${o.notas ? `<div><b>Notas:</b> ${esc(o.notas)}</div>` : ''}
-    <p style="margin-top:22px;font-size:11px;opacity:.7">Presentar esta nota para recoger sus lentes. Trabajos no recogidos después de 60 días no tienen reclamo.</p></div>`;
+// ---------- Comprobantes: nota de venta, boleta y factura en PDF ----------
+const TIPOS_CP = { nota: 'Nota de venta', boleta: 'Boleta de venta', factura: 'Factura' };
+const TITULO_CP = { nota: 'NOTA DE VENTA', boleta: 'BOLETA DE VENTA', factura: 'FACTURA' };
+const fact = () => db.config.fact;
+const comprobanteDe = oid => db.comprobantes.filter(c => c.ordenId === oid && c.estado !== 'anulado').slice(-1)[0];
+const cpNum = c => `${c.serie}-${c.numero === 0 ? 'PRUEBA' : String(c.numero).padStart(8, '0')}`;
+const canShareFiles = (() => { try { return !!(navigator.canShare && navigator.canShare({ files: [new File(['x'], 'x.pdf', { type: 'application/pdf' })] })); } catch (e) { return false; } })();
+
+function numeroALetras(n) {
+  const U = ['', 'UNO', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE', 'DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE',
+    'VEINTE', 'VEINTIUNO', 'VEINTIDÓS', 'VEINTITRÉS', 'VEINTICUATRO', 'VEINTICINCO', 'VEINTISÉIS', 'VEINTISIETE', 'VEINTIOCHO', 'VEINTINUEVE'];
+  const D = ['', '', '', 'TREINTA', 'CUARENTA', 'CINCUENTA', 'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA'];
+  const C = ['', 'CIENTO', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS', 'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS'];
+  const cien = x => {
+    if (x === 100) return 'CIEN';
+    const r = x % 100, dec = r < 30 ? U[r] : D[Math.floor(r / 10)] + (r % 10 ? ' Y ' + U[r % 10] : '');
+    return [C[Math.floor(x / 100)], dec].filter(Boolean).join(' ');
+  };
+  const cents = Math.round(n * 100), ent = Math.floor(cents / 100), cts = cents % 100;
+  const mill = Math.floor(ent / 1e6), miles = Math.floor(ent / 1000) % 1000, rest = ent % 1000;
+  let t = ent === 0 ? 'CERO' : [mill ? (mill === 1 ? 'UN MILLÓN' : cien(mill) + ' MILLONES') : '', miles ? (miles === 1 ? 'MIL' : cien(miles) + ' MIL') : '', cien(rest)].filter(Boolean).join(' ');
+  t = t.replace(/UNO (MIL|MILLONES)/g, 'UN $1');
+  return `${t} CON ${String(cts).padStart(2, '0')}/100 SOLES`;
 }
-function verNota(o) {
-  const p = paciente(o.pacienteId);
+
+function cpCalc(c) {
+  const total = round2(c.total), pct = num(c.igvPct);
+  const gravada = pct ? round2(total / (1 + pct / 100)) : total;
+  return { total, pct, gravada, igv: pct ? round2(total - gravada) : 0, sub: round2(c.items.reduce((s, i) => s + i.cant * i.precio, 0)) };
+}
+
+// Pide los datos del cliente y crea el comprobante con el siguiente número de la serie.
+function emitirForm(o, tipo) {
+  const p = paciente(o.pacienteId), F = fact(), tot = totalOrden(o);
+  tipo = tipo || (F.ruc ? 'boleta' : 'nota');
   modal({
-    title: `Nota de venta N° ${pad(o.numero)}`, wide: true,
-    body: `<div class="nota-view">${notaHTML(o)}</div>`,
-    foot: `${p?.telefono ? `<a class="btn wa" target="_blank" rel="noopener" href="${waLink(p.telefono, ordenWaTexto({ ...o, estado: 'pendiente' }, p))}">${icon('wa')} Enviar por WhatsApp</a>` : ''}
-      ${EN_CLAUDE ? '' : `<button class="btn primary" id="printnota">${icon('print')} Imprimir</button>`}
-      <button class="btn ${EN_CLAUDE ? 'primary' : ''}" id="savenota">${icon('down')} ${EN_CLAUDE ? 'Guardar para imprimir' : 'Guardar'}</button>`,
+    title: `Comprobante · Orden N° ${pad(o.numero)}`,
+    body: `<form id="cpf" class="form">
+      <div class="seg" id="cptipo">${Object.entries(TIPOS_CP).map(([k, t]) => `<button type="button" data-t="${k}">${t}</button>`).join('')}</div>
+      <div id="cpwarn"></div>
+      <div class="fg">
+        <label class="f" id="l-doc"><span></span><input class="inp" name="doc" inputmode="numeric" autocomplete="off"></label>
+        <label class="f full" id="l-nom"><span></span><input class="inp" name="nombre" autocomplete="off"></label>
+        <label class="f full" id="l-dir"><span></span><input class="inp" name="direccion" autocomplete="off"></label>
+      </div>
+      <div class="row between"><span class="muted">Total</span><b class="num" style="font-size:20px">${money(tot)}</b></div>
+      <div class="hint" id="cpnum"></div></form>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="cpf" id="cpgo">${icon('file')} Generar PDF</button>`,
     onMount: bg => {
-      $('#printnota', bg) && ($('#printnota', bg).onclick = () => { $('#print').innerHTML = notaHTML(o); window.print(); });
-      $('#savenota', bg).onclick = () => saveFile(`Nota ${pad(o.numero)} ${p?.nombre || ''}.html`,
-        `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Nota ${pad(o.numero)}</title><style>${NOTA_CSS}</style></head><body>${notaHTML(o)}<script>window.onload=()=>window.print()<\/script></body></html>`);
+      const fDoc = $('[name=doc]', bg), fNom = $('[name=nombre]', bg), fDir = $('[name=direccion]', bg);
+      const set = t => {
+        tipo = t;
+        $$('#cptipo button', bg).forEach(b => b.classList.toggle('on', b.dataset.t === t));
+        const fa = t === 'factura';
+        $('#l-doc span', bg).textContent = fa ? 'RUC del cliente (11 dígitos)' : t === 'boleta' && tot >= 700 ? 'DNI del cliente (obligatorio desde S/ 700)' : 'DNI del cliente (opcional)';
+        $('#l-nom span', bg).textContent = fa ? 'Razón social' : 'Nombre del cliente';
+        $('#l-dir span', bg).textContent = fa ? 'Dirección fiscal del cliente' : 'Dirección (opcional)';
+        if (fa && !/^\d{11}$/.test(fDoc.value)) { fDoc.value = ''; fNom.value = ''; }
+        if (!fa && !fDoc.value && !fNom.value) { fDoc.value = p?.dni || ''; fNom.value = p?.nombre || ''; }
+        const falta = t !== 'nota' && !F.ruc;
+        $('#cpwarn', bg).innerHTML = falta ? `<div class="lock-note">${icon('file')}<div>Para emitir ${TIPOS_CP[t].toLowerCase()} primero pon tu RUC y razón social en <a class="strong" href="#/ajustes">Ajustes → Boletas y facturas</a>.</div></div>` : '';
+        $('#cpgo', bg).disabled = falta;
+        const numero = t === 'boleta' ? F.numB : t === 'factura' ? F.numF : o.numero;
+        const serie = t === 'boleta' ? F.serieB : t === 'factura' ? F.serieF : 'NV01';
+        $('#cpnum', bg).textContent = `Se emitirá ${TIPOS_CP[t].toLowerCase()} ${serie}-${String(numero).padStart(8, '0')}`;
+      };
+      fDoc.value = p?.dni || ''; fNom.value = p?.nombre || '';
+      $$('#cptipo button', bg).forEach(b => b.onclick = () => set(b.dataset.t));
+      set(tipo);
+      $('#cpf', bg).onsubmit = e => {
+        e.preventDefault();
+        const doc = fDoc.value.replace(/\s/g, ''), nombre = fNom.value.trim(), dir = fDir.value.trim();
+        if (tipo === 'factura') {
+          if (!/^(10|15|17|20)\d{9}$/.test(doc)) return toast('El RUC debe tener 11 dígitos (empieza con 10 o 20)');
+          if (!nombre || !dir) return toast('La factura necesita razón social y dirección');
+        } else {
+          if (doc && !/^[A-Za-z0-9]{8,12}$/.test(doc)) return toast('Revisa el documento: el DNI tiene 8 dígitos');
+          if (tipo === 'boleta' && tot >= 700 && !doc) return toast('Desde S/ 700 la boleta necesita el DNI del cliente');
+        }
+        let serie = 'NV01', numero = o.numero;
+        if (tipo === 'boleta') { serie = F.serieB; numero = F.numB++; }
+        if (tipo === 'factura') { serie = F.serieF; numero = F.numF++; }
+        const pagos = pagosDe(o.id), sal = saldoOrden(o);
+        const c = {
+          id: uid(), tipo, serie, numero, fecha: hoy(), hora: new Date().toTimeString().slice(0, 5), ordenId: o.id, ordenNum: o.numero,
+          cliente: { docTipo: tipo === 'factura' ? 'RUC' : doc.length === 8 ? 'DNI' : doc ? 'CE' : '', doc, nombre: nombre || 'CLIENTES VARIOS', direccion: dir },
+          items: o.items.map(i => ({ desc: i.desc, cant: num(i.cant), precio: num(i.precio) })), descuento: num(o.descuento), total: tot,
+          igvPct: tipo !== 'nota' && F.igv ? num(F.igvPct) : 0, pagado: pagadoOrden(o), saldo: Math.max(0, sal),
+          metodos: [...new Set(pagos.map(x => x.metodo))], medidaId: o.medidaId, entrega: o.entrega, por: user, estado: 'emitido', creado: Date.now(),
+        };
+        db.comprobantes.push(c); save(); closeModal(); render();
+        comprobanteView(c);
+      };
     },
   });
+}
+
+function comprobanteView(c) {
+  const o = orden(c.ordenId), p = o && paciente(o.pacienteId);
+  const name = `${TIPOS_CP[c.tipo]} ${cpNum(c)}.pdf`;
+  const waTxt = p ? `Hola ${p.nombre.split(' ')[0]}, te saludamos de *${db.config.nombre}*. Te enviamos tu ${TIPOS_CP[c.tipo].toLowerCase()} *${cpNum(c)}* por ${money(c.total)}. ¡Gracias por tu compra!` : '';
+  modal({
+    title: `${TIPOS_CP[c.tipo]} ${cpNum(c)}`,
+    body: `${c.estado === 'anulado' ? `<div class="lock-note">${icon('x')}<div>Este comprobante está <b>anulado</b>.</div></div>` : ''}
+      <div class="cash-sum">
+        <div class="line"><span class="muted">${c.tipo === 'factura' ? 'Razón social' : 'Cliente'}</span><b style="text-align:right">${esc(c.cliente.nombre)}</b></div>
+        ${c.cliente.doc ? `<div class="line"><span class="muted">${c.cliente.docTipo || 'Doc.'}</span><b class="num">${esc(c.cliente.doc)}</b></div>` : ''}
+        <div class="line"><span class="muted">Fecha</span><b>${fdate(c.fecha)} ${esc(c.hora || '')}</b></div>
+        <div class="line total"><span>Total</span><span class="num">${money(c.total)}</span></div>
+      </div>
+      ${c.tipo !== 'nota' ? `<p class="hint" style="margin:12px 0 0">Recuerda: para que sea válido ante SUNAT emítelo también como comprobante electrónico con la misma serie y número.</p>` : ''}`,
+    foot: `${c.estado !== 'anulado' ? `<button class="btn danger" id="cpanul" style="margin-right:auto">${icon('trash')} Anular</button>` : ''}
+      ${p?.telefono && !canShareFiles ? `<a class="btn wa" target="_blank" rel="noopener" href="${waLink(p.telefono, waTxt)}">${icon('wa')} WhatsApp</a>` : ''}
+      ${canShareFiles ? `<button class="btn wa" id="cpshare">${icon('wa')} Compartir PDF</button>` : ''}
+      <button class="btn primary" id="cpdl">${icon('down')} Descargar PDF</button>`,
+    onMount: bg => {
+      const make = async () => { try { return await comprobantePDF(c); } catch (e) { toast('No se pudo generar el PDF: ' + e.message); return null; } };
+      $('#cpdl', bg).onclick = async () => { const b = await make(); if (b) saveFile(name, b); };
+      $('#cpshare', bg) && ($('#cpshare', bg).onclick = async () => {
+        const b = await make(); if (!b) return;
+        try { await navigator.share({ files: [new File([b], name, { type: 'application/pdf' })], text: waTxt }); }
+        catch (e) { if (e.name !== 'AbortError') saveFile(name, b); }
+      });
+      $('#cpanul', bg) && ($('#cpanul', bg).onclick = () => dual(`Anular ${TIPOS_CP[c.tipo].toLowerCase()} ${cpNum(c)} de ${money(c.total)}`, () => {
+        c.estado = 'anulado'; c.anulado = hoy(); save(); toast('Comprobante anulado'); render();
+      }));
+    },
+  });
+}
+
+let jspdfP = null;
+function loadJsPDF() {
+  if (window.jspdf) return Promise.resolve(window.jspdf);
+  return jspdfP || (jspdfP = new Promise((res, rej) => {
+    const s = document.createElement('script'); s.src = 'jspdf.umd.min.js';
+    s.onload = () => res(window.jspdf); s.onerror = () => { jspdfP = null; rej(new Error('revisa tu conexión')); };
+    document.head.appendChild(s);
+  }));
+}
+async function comprobantePDF(c) {
+  const { jsPDF } = await loadJsPDF();
+  const F = fact();
+  if (F.formato === 'ticket') {
+    const h = drawTicket(new jsPDF({ unit: 'mm', format: [80, 1500] }), c, F);
+    const doc = new jsPDF({ unit: 'mm', format: [80, Math.max(h + 6, 90)] });
+    drawTicket(doc, c, F);
+    return doc.output('blob');
+  }
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  drawA4(doc, c, F);
+  return doc.output('blob');
+}
+
+const PDF_NAVY = [20, 38, 63], PDF_TEAL = [28, 140, 134], PDF_GRAY = [98, 108, 126], PDF_LINE = [222, 218, 208];
+function pdfText(doc, t, x, y, o = {}) {
+  doc.setFont('helvetica', o.b ? 'bold' : 'normal'); doc.setFontSize(o.s || 9); doc.setTextColor(...(o.c || PDF_NAVY));
+  doc.text(String(t ?? ''), x, y, { align: o.a || 'left' });
+}
+function pdfSello(doc, c, W, H) {
+  const t = c.estado === 'anulado' ? 'ANULADO' : c.numero === 0 ? 'PRUEBA' : '';
+  if (!t) return;
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(W > 100 ? 90 : 34); doc.setTextColor(214, 82, 60);
+  doc.text(t, W / 2, H / 2, { align: 'center', angle: 30 });
+}
+function emisorLineas(F) {
+  return [
+    F.razon && F.razon !== db.config.nombre ? F.razon : '',
+    [F.direccion || db.config.direccion, F.distrito, F.provincia, F.departamento].filter(Boolean).join(' - '),
+    [db.config.telefono && 'Tel. ' + db.config.telefono, F.email, F.web].filter(Boolean).join('   ·   '),
+  ].filter(Boolean);
+}
+
+function drawA4(doc, c, F) {
+  const M = 14, W = 210, R = W - M, k = cpCalc(c), fa = c.tipo === 'factura';
+  let y = 14, tx = M;
+  if (F.logo) {
+    const r = F.logoRatio || 1, lw = r >= 1.6 ? 38 : 26, lh = Math.min(26, lw / r);
+    try { doc.addImage(F.logo, 'PNG', M, y, lh * r, lh); tx = M + lh * r + 5; } catch (e) { }
+  }
+  pdfText(doc, db.config.nombre || F.razon, tx, y + 6, { b: 1, s: 16 });
+  let ey = y + 12;
+  emisorLineas(F).forEach(l => doc.splitTextToSize(l, 128 - tx).forEach(s => { pdfText(doc, s, tx, ey, { s: 8.5, c: PDF_GRAY }); ey += 4.2; }));
+  // recuadro de RUC y número
+  const bx = 134, bw = R - bx;
+  doc.setDrawColor(...PDF_NAVY); doc.setLineWidth(0.5); doc.roundedRect(bx, y, bw, 31, 2, 2, 'S');
+  pdfText(doc, F.ruc ? 'R.U.C. ' + F.ruc : db.config.nombre, bx + bw / 2, y + 8, { b: 1, s: 11, a: 'center' });
+  doc.setFillColor(...PDF_NAVY); doc.rect(bx + 0.25, y + 11.5, bw - 0.5, 9, 'F');
+  pdfText(doc, TITULO_CP[c.tipo], bx + bw / 2, y + 17.6, { b: 1, s: 11, a: 'center', c: [255, 255, 255] });
+  pdfText(doc, cpNum(c), bx + bw / 2, y + 27, { b: 1, s: 12, a: 'center' });
+  y = Math.max(ey, y + 31) + 6;
+  // datos del cliente
+  doc.setFillColor(248, 246, 241); doc.setDrawColor(...PDF_LINE); doc.setLineWidth(0.3); doc.roundedRect(M, y, W - 2 * M, 25, 2, 2, 'FD');
+  const izq = [[fa ? 'Razón social' : 'Cliente', c.cliente.nombre], [c.cliente.docTipo === 'RUC' ? 'R.U.C.' : c.cliente.docTipo || 'DNI', c.cliente.doc || '—'], ['Dirección', c.cliente.direccion || '—']];
+  const der = [['Fecha de emisión', fdate(c.fecha, { day: '2-digit', month: '2-digit', year: 'numeric' }) + (c.hora ? '  ' + c.hora : '')], ['Moneda', 'SOLES'], ['Orden N°', pad(c.ordenNum)], ['Forma de pago', c.saldo > 0.009 ? 'Crédito' : 'Contado']];
+  izq.forEach(([l, v], i) => { pdfText(doc, l, M + 4, y + 6.5 + i * 6.5, { b: 1, s: 7.5, c: PDF_GRAY }); pdfText(doc, doc.splitTextToSize(String(v), 88)[0], M + 26, y + 6.5 + i * 6.5, { s: 9 }); });
+  der.forEach(([l, v], i) => { pdfText(doc, l, 132, y + 5.5 + i * 5.2, { b: 1, s: 7.5, c: PDF_GRAY }); pdfText(doc, v, R - 4, y + 5.5 + i * 5.2, { s: 8.5, a: 'right' }); });
+  y += 32;
+  // medida (solo nota de venta)
+  const m = c.tipo === 'nota' && F.medida && db.medidas.find(x => x.id === c.medidaId);
+  if (m) {
+    pdfText(doc, `MEDIDA · examen del ${fdate(m.fecha)}${m.dip ? '  ·  DIP ' + m.dip + ' mm' : ''}${m.altura ? '  ·  Altura ' + m.altura + ' mm' : ''}`, M, y, { b: 1, s: 8, c: PDF_TEAL });
+    y += 3;
+    const cols = ['', 'Esfera', 'Cilindro', 'Eje', 'Adición', 'AV'], cw = (W - 2 * M) / 6;
+    doc.setFillColor(243, 241, 236); doc.rect(M, y, W - 2 * M, 6, 'F');
+    cols.forEach((t, i) => pdfText(doc, t.toUpperCase(), M + cw * i + cw / 2, y + 4.2, { b: 1, s: 7, c: PDF_GRAY, a: 'center' }));
+    [['OD', m.od], ['OI', m.oi]].forEach(([lab, e], r) => {
+      const yy = y + 11 + r * 6;
+      [lab, rx2(e.esf), rx2(e.cil), rx2(e.eje, 0), rx2(e.add), e.av || '—'].forEach((t, i) => pdfText(doc, t, M + cw * i + cw / 2, yy, { b: i === 0, s: 9, a: 'center' }));
+    });
+    y += 24;
+  }
+  // detalle
+  const xC = M + 8, xD = M + 18, xU = R - 34, xI = R - 3;
+  doc.setFillColor(...PDF_NAVY); doc.rect(M, y, W - 2 * M, 8, 'F');
+  [['CANT.', xC, 'center'], ['DESCRIPCIÓN', xD, 'left'], [fa ? 'V. UNIT.' : 'P. UNIT.', xU, 'right'], [fa ? 'VALOR VENTA' : 'IMPORTE', xI, 'right']]
+    .forEach(([t, x, a]) => pdfText(doc, t, x, y + 5.4, { b: 1, s: 8, c: [255, 255, 255], a }));
+  y += 8;
+  const div = fa && k.pct ? 1 + k.pct / 100 : 1;
+  c.items.forEach(it => {
+    const lines = doc.splitTextToSize(it.desc, xU - xD - 22);
+    const h = Math.max(8, lines.length * 4.2 + 3.8);
+    if (y + h > 262) { doc.addPage(); y = 18; }
+    pdfText(doc, it.cant, xC, y + 5.3, { s: 9, a: 'center' });
+    lines.forEach((l, i) => pdfText(doc, l, xD, y + 5.3 + i * 4.2, { s: 9 }));
+    pdfText(doc, money(it.precio / div), xU, y + 5.3, { s: 9, a: 'right' });
+    pdfText(doc, money(it.cant * it.precio / div), xI, y + 5.3, { s: 9, a: 'right' });
+    y += h; doc.setDrawColor(...PDF_LINE); doc.line(M, y, R, y);
+  });
+  // totales
+  y += 6;
+  const tl = R - 64, filas = [];
+  if (c.descuento) filas.push(['Descuento', '− ' + money(c.descuento)]);
+  if (k.pct) { filas.push(['Op. gravada', money(k.gravada)]); filas.push([`IGV (${k.pct}%)`, money(k.igv)]); }
+  const yTot = y;
+  filas.forEach(([l, v]) => { pdfText(doc, l, tl, y, { s: 9, c: PDF_GRAY }); pdfText(doc, v, xI, y, { s: 9, a: 'right' }); y += 5.5; });
+  doc.setFillColor(...PDF_TEAL); doc.roundedRect(tl - 3, y - 4.5, R - tl + 3, 9, 1.5, 1.5, 'F');
+  pdfText(doc, 'TOTAL', tl, y + 1.6, { b: 1, s: 10.5, c: [255, 255, 255] }); pdfText(doc, money(k.total), xI, y + 1.6, { b: 1, s: 11, a: 'right', c: [255, 255, 255] });
+  let ly = yTot;
+  doc.splitTextToSize('SON: ' + numeroALetras(k.total), tl - M - 8).forEach(s => { pdfText(doc, s, M, ly, { b: 1, s: 8.5 }); ly += 4.3; });
+  ly += 2;
+  if (c.pagado > 0.009 || c.saldo > 0.009) {
+    pdfText(doc, `A cuenta: ${money(c.pagado)}${c.metodos.length ? ' (' + c.metodos.join(', ') + ')' : ''}`, M, ly, { s: 8.5, c: PDF_GRAY }); ly += 4.5;
+    if (c.saldo > 0.009) { pdfText(doc, `Saldo pendiente: ${money(c.saldo)}`, M, ly, { b: 1, s: 8.5 }); ly += 4.5; }
+  }
+  if (c.entrega && c.tipo === 'nota') { pdfText(doc, `Fecha de entrega: ${fdate(c.entrega, { weekday: 'long', day: 'numeric', month: 'long' })}`, M, ly, { s: 8.5, c: PDF_GRAY }); ly += 4.5; }
+  y = Math.max(y + 12, ly + 6);
+  // pie
+  const pie = [F.cuentas, F.pie].filter(Boolean).join('\n');
+  if (y > 250) { doc.addPage(); y = 20; }
+  doc.setDrawColor(...PDF_LINE); doc.line(M, y, R, y); y += 6;
+  pie.split('\n').forEach(par => doc.splitTextToSize(par, W - 2 * M).forEach(s => { pdfText(doc, s, W / 2, y, { s: 8.5, c: PDF_GRAY, a: 'center' }); y += 4.3; }));
+  pdfText(doc, `Atendido por ${socioName(c.por)}`, W / 2, Math.max(y + 2, 287), { s: 7.5, c: PDF_GRAY, a: 'center' });
+  pdfSello(doc, c, W, 297);
+}
+
+function drawTicket(doc, c, F) {
+  const W = 80, M = 4, X = W / 2, R = W - M, k = cpCalc(c), fa = c.tipo === 'factura';
+  let y = 6;
+  const center = (t, o = {}) => doc.splitTextToSize(String(t), W - 2 * M).forEach(s => { pdfText(doc, s, X, y, { ...o, a: 'center' }); y += (o.s || 7.5) * 0.45; });
+  const sep = () => { y += 1; doc.setLineDashPattern([0.8, 0.8], 0); doc.setDrawColor(150, 150, 150); doc.line(M, y, R, y); doc.setLineDashPattern([], 0); y += 4; };
+  const fila = (l, v, o = {}) => { o = { s: 7.5, ...o }; pdfText(doc, l, M, y, o); pdfText(doc, v, R, y, { ...o, a: 'right' }); y += o.s * 0.48; };
+  if (F.logo) { const r = F.logoRatio || 1, h = Math.min(16, 30 / r); try { doc.addImage(F.logo, 'PNG', X - h * r / 2, y, h * r, h); y += h + 4; } catch (e) { } }
+  center(db.config.nombre || F.razon, { b: 1, s: 11 }); y += 0.5;
+  emisorLineas(F).forEach(l => center(l, { s: 7.5, c: PDF_GRAY }));
+  if (F.ruc) center('R.U.C. ' + F.ruc, { b: 1, s: 8.5 });
+  sep();
+  center(TITULO_CP[c.tipo], { b: 1, s: 9.5 }); center(cpNum(c), { b: 1, s: 9.5 });
+  sep();
+  fila('Fecha', fdate(c.fecha, { day: '2-digit', month: '2-digit', year: 'numeric' }) + (c.hora ? ' ' + c.hora : ''));
+  fila('Orden N°', pad(c.ordenNum));
+  doc.splitTextToSize((fa ? 'Razón social: ' : 'Cliente: ') + c.cliente.nombre, W - 2 * M).forEach(s => { pdfText(doc, s, M, y, { s: 7.5 }); y += 3.6; });
+  if (c.cliente.doc) fila(c.cliente.docTipo === 'RUC' ? 'R.U.C.' : c.cliente.docTipo || 'DNI', c.cliente.doc);
+  if (c.cliente.direccion) doc.splitTextToSize('Dirección: ' + c.cliente.direccion, W - 2 * M).forEach(s => { pdfText(doc, s, M, y, { s: 7.5 }); y += 3.6; });
+  sep();
+  const div = fa && k.pct ? 1 + k.pct / 100 : 1;
+  c.items.forEach(it => {
+    doc.splitTextToSize(it.desc, W - 2 * M).forEach(s => { pdfText(doc, s, M, y, { s: 7.5 }); y += 3.5; });
+    fila(`  ${it.cant} x ${money(it.precio / div)}`, money(it.cant * it.precio / div), { s: 7.5, c: PDF_GRAY });
+    y += 0.8;
+  });
+  sep();
+  if (c.descuento) fila('Descuento', '− ' + money(c.descuento));
+  if (k.pct) { fila('Op. gravada', money(k.gravada)); fila(`IGV (${k.pct}%)`, money(k.igv)); }
+  y += 1; fila('TOTAL', money(k.total), { b: 1, s: 10 }); y += 1;
+  doc.splitTextToSize('SON: ' + numeroALetras(k.total), W - 2 * M).forEach(s => { pdfText(doc, s, M, y, { s: 7, b: 1 }); y += 3.3; });
+  if (c.pagado > 0.009 || c.saldo > 0.009) { y += 1; fila('A cuenta', money(c.pagado)); if (c.saldo > 0.009) fila('Saldo', money(c.saldo), { b: 1 }); }
+  sep();
+  [F.cuentas, F.pie].filter(Boolean).join('\n').split('\n').forEach(par => center(par, { s: 7, c: PDF_GRAY }));
+  center(`Atendido por ${socioName(c.por)}`, { s: 6.5, c: PDF_GRAY });
+  pdfSello(doc, c, W, Math.min(y, 140));
+  return y;
+}
+
+function logoDesdeArchivo(file, cb) {
+  const r = new FileReader();
+  r.onload = () => {
+    const im = new Image();
+    im.onload = () => {
+      const s = Math.min(1, 500 / Math.max(im.width, im.height)), cv = document.createElement('canvas');
+      cv.width = Math.round(im.width * s); cv.height = Math.round(im.height * s);
+      cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
+      cb(cv.toDataURL('image/png'), cv.width / cv.height);
+    };
+    im.onerror = () => toast('Esa imagen no se pudo leer; prueba con PNG o JPG');
+    im.src = r.result;
+  };
+  r.readAsDataURL(file);
 }
 
 // ---------- Caja diaria ----------
@@ -951,11 +1247,11 @@ function cajaCSV(d) {
   const c = cajaData(d);
   const q = v => { const t = String(v ?? ''); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
   const n2 = v => Number(v || 0).toFixed(2);
-  const rows = [[db.config.nombre, 'Cierre de caja', d], [], ['N° orden', 'Paciente', 'Compró', 'Total orden', 'Abonó', 'Resta', 'Método']];
+  const rows = [[db.config.nombre, 'Cierre de caja', d], [], ['N° orden', 'Paciente', 'Compró', 'Total orden', 'Abonó', 'Resta', 'Método', 'Comprobante']];
   c.pagos.forEach(pg => {
     const o = orden(pg.ordenId); if (!o) return;
     const hasta = pagosDe(o.id).filter(x => x.fecha < pg.fecha || (x.fecha === pg.fecha && (x.ts || 0) <= (pg.ts || 0))).reduce((s, x) => s + num(x.monto), 0);
-    rows.push([pad(o.numero), paciente(o.pacienteId)?.nombre, o.items.map(i => i.desc).join(' + '), n2(totalOrden(o)), n2(pg.monto), n2(Math.max(0, totalOrden(o) - hasta)), pg.metodo]);
+    rows.push([pad(o.numero), paciente(o.pacienteId)?.nombre, o.items.map(i => i.desc).join(' + '), n2(totalOrden(o)), n2(pg.monto), n2(Math.max(0, totalOrden(o) - hasta)), pg.metodo, comprobanteDe(o.id) ? cpNum(comprobanteDe(o.id)) : '']);
   });
   rows.push([], ['Gastos', '', '', '', 'Monto', '', 'Método']);
   c.gastos.forEach(g => rows.push([g.concepto, '', '', '', n2(g.monto), '', g.metodo]));
@@ -1085,15 +1381,47 @@ routes.recordatorios = {
 // ---------- Ajustes ----------
 routes.ajustes = {
   html() {
-    const c = db.config;
+    const c = db.config, F = c.fact;
     return `<div class="page-head"><div><h1>Ajustes</h1><p>Datos de la óptica, socios y respaldo.</p></div></div>
       <div class="grid g2">
         <div class="card"><div class="card-h"><h3>Datos de la óptica</h3></div><div class="card-b"><form id="cfg" class="form">
           <label class="f">Nombre<input class="inp" name="nombre" value="${esc(c.nombre)}" required></label>
-          <div class="fg"><label class="f">Teléfono<input class="inp" name="telefono" value="${esc(c.telefono)}"></label><label class="f">RUC<input class="inp" name="ruc" value="${esc(c.ruc)}"></label></div>
+          <label class="f">Teléfono<input class="inp" name="telefono" value="${esc(c.telefono)}"></label>
           <label class="f">Dirección<input class="inp" name="direccion" value="${esc(c.direccion)}"></label>
           <label class="f">Recordar control visual cada (meses)<input class="inp" name="recordatorioMeses" inputmode="numeric" value="${esc(c.recordatorioMeses)}"></label>
           <button class="btn primary">Guardar</button></form></div></div>
+        <div class="card" style="grid-column:1/-1"><div class="card-h"><div><h3>Boletas y facturas</h3><div class="sub">Estos datos salen en el PDF de cada comprobante.</div></div></div><div class="card-b"><form id="factf" class="form">
+          <div class="fg fg3">
+            <label class="f">RUC<input class="inp" name="ruc" inputmode="numeric" maxlength="11" value="${esc(F.ruc)}" placeholder="11 dígitos"></label>
+            <label class="f span2">Razón social<input class="inp" name="razon" value="${esc(F.razon)}" placeholder="Como figura en SUNAT"></label>
+            <label class="f full">Dirección fiscal<input class="inp" name="direccion" value="${esc(F.direccion)}"></label>
+            <label class="f">Distrito<input class="inp" name="distrito" value="${esc(F.distrito)}"></label>
+            <label class="f">Provincia<input class="inp" name="provincia" value="${esc(F.provincia)}"></label>
+            <label class="f">Departamento<input class="inp" name="departamento" value="${esc(F.departamento)}"></label>
+            <label class="f">Correo<input class="inp" name="email" type="email" value="${esc(F.email)}"></label>
+            <label class="f span2">Web o redes <span class="hint">(opcional)</span><input class="inp" name="web" value="${esc(F.web)}" placeholder="Instagram, Facebook o página web"></label>
+          </div>
+          <div class="row wrap" style="gap:14px">${F.logo ? `<img src="${F.logo}" alt="Logo" style="height:56px;max-width:180px;object-fit:contain;border:1px solid var(--line);border-radius:10px;padding:6px;background:#fff">` : '<span class="muted small">Sin logo</span>'}
+            <label class="btn sm">${icon('img')} ${F.logo ? 'Cambiar logo' : 'Subir logo'}<input type="file" id="logoin" accept="image/*" hidden></label>${F.logo ? `<button type="button" class="btn sm ghost" id="logodel">Quitar</button>` : ''}</div>
+          <div class="fg fg4">
+            <label class="f">Serie boleta<input class="inp" name="serieB" value="${esc(F.serieB)}" maxlength="4"></label>
+            <label class="f">Próximo N° boleta<input class="inp" name="numB" inputmode="numeric" value="${esc(F.numB)}"></label>
+            <label class="f">Serie factura<input class="inp" name="serieF" value="${esc(F.serieF)}" maxlength="4"></label>
+            <label class="f">Próximo N° factura<input class="inp" name="numF" inputmode="numeric" value="${esc(F.numF)}"></label>
+          </div>
+          <div class="fg">
+            <label class="f">Tamaño del PDF<select class="inp" name="formato"><option value="A4" ${F.formato === 'A4' ? 'selected' : ''}>Hoja A4</option><option value="ticket" ${F.formato === 'ticket' ? 'selected' : ''}>Ticket de 80 mm</option></select></label>
+            <label class="f">IGV (%)<input class="inp" name="igvPct" inputmode="decimal" value="${esc(F.igvPct)}"></label>
+          </div>
+          <label class="row small" style="gap:8px"><input type="checkbox" name="igv" ${F.igv ? 'checked' : ''}> Los precios incluyen IGV (se desglosa en boleta y factura)</label>
+          <label class="row small" style="gap:8px"><input type="checkbox" name="medida" ${F.medida ? 'checked' : ''}> Incluir la medida del paciente en la nota de venta</label>
+          <div class="fg">
+            <label class="f">Cuentas para pagar <span class="hint">(opcional)</span><textarea class="inp" name="cuentas" placeholder="Yape 987 654 321 · BCP 191-12345678-0-12">${esc(F.cuentas)}</textarea></label>
+            <label class="f">Texto al pie<textarea class="inp" name="pie">${esc(F.pie)}</textarea></label>
+          </div>
+          <p class="hint" style="margin:0">Para que la boleta o factura tenga validez ante SUNAT debe emitirse también como comprobante electrónico (SUNAT Operaciones en Línea o un proveedor autorizado).</p>
+          <div class="actions"><button class="btn primary">Guardar</button><button type="button" class="btn" id="cptest">${icon('file')} Ver PDF de prueba</button></div>
+        </form></div></div>
         <div class="card"><div class="card-h"><h3>Socios</h3></div><div class="card-b">
           ${c.socios.map(s => `<div class="row between" style="padding:10px 0;border-bottom:1px solid var(--line-2)"><div class="row"><span class="avatar">${initials(s.nombre)}</span><div><b>${esc(s.nombre)}</b><div class="muted small">${s.pct}% de la ganancia</div></div></div><button class="btn sm" data-s="${s.id}">Editar</button></div>`).join('')}
           <p class="hint">Cambiar nombres, porcentajes o claves pide la clave de ambos socios.</p></div></div>
@@ -1110,18 +1438,40 @@ routes.ajustes = {
   bind() {
     $('#cfg').onsubmit = e => { e.preventDefault(); const f = readForm(e.target); Object.assign(db.config, f, { recordatorioMeses: num(f.recordatorioMeses) || 12 }); save(); toast('Datos guardados'); render(); };
     $$('[data-s]').forEach(b => b.onclick = () => dual('Editar datos de socio', () => socioForm(socio(b.dataset.s))));
+    $('#factf').onsubmit = e => {
+      e.preventDefault();
+      const f = readForm(e.target), F = fact();
+      if (f.ruc && !/^\d{11}$/.test(f.ruc)) return toast('El RUC debe tener 11 dígitos');
+      Object.assign(F, f, {
+        igv: !!f.igv, medida: !!f.medida, igvPct: num(f.igvPct) || 18,
+        numB: Math.max(1, parseInt(f.numB, 10) || 1), numF: Math.max(1, parseInt(f.numF, 10) || 1),
+        serieB: (f.serieB || 'B001').toUpperCase(), serieF: (f.serieF || 'F001').toUpperCase(),
+      });
+      save(); toast('Datos de comprobantes guardados'); render();
+    };
+    $('#logoin').onchange = e => { const file = e.target.files[0]; if (file) logoDesdeArchivo(file, (url, ratio) => { Object.assign(fact(), { logo: url, logoRatio: ratio }); save(); toast('Logo guardado'); render(); }); };
+    $('#logodel') && ($('#logodel').onclick = () => { fact().logo = ''; save(); render(); });
+    $('#cptest').onclick = async () => {
+      const o = db.ordenes.slice().sort((a, b) => b.numero - a.numero)[0];
+      if (!o) return toast('Registra una venta para ver el ejemplo');
+      const F = fact(), p = paciente(o.pacienteId);
+      const c = { tipo: F.ruc ? 'boleta' : 'nota', serie: F.ruc ? F.serieB : 'NV01', numero: 0, fecha: hoy(), hora: new Date().toTimeString().slice(0, 5), ordenNum: o.numero,
+        cliente: { docTipo: p?.dni ? 'DNI' : '', doc: p?.dni || '', nombre: p?.nombre || 'CLIENTES VARIOS', direccion: '' }, items: o.items, descuento: num(o.descuento), total: totalOrden(o),
+        igvPct: F.ruc && F.igv ? num(F.igvPct) : 0, pagado: pagadoOrden(o), saldo: Math.max(0, saldoOrden(o)), metodos: [...new Set(pagosDe(o.id).map(x => x.metodo))], medidaId: o.medidaId, entrega: o.entrega, por: user, estado: 'prueba' };
+      try { saveFile(`Prueba ${TIPOS_CP[c.tipo]}.pdf`, await comprobantePDF(c)); } catch (err) { toast('No se pudo generar el PDF: ' + err.message); }
+    };
     $('#exp').onclick = async () => {
       const ok = await saveFile(`respaldo-${(db.config.nombre || 'optica').toLowerCase().replace(/\s+/g, '-')}-${hoy()}.json`, JSON.stringify(db));
       if (ok) { db.config.ultimoRespaldo = Date.now(); save(); render(); }
     };
     $('#reset').onclick = () => dual('Borrar pacientes, órdenes, caja e inventario (se conservan los socios y los datos de la óptica)', () => {
-      const cfg = { ...db.config, nextOrden: 1 }; db = blank(); db.config = cfg; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
+      const cfg = { ...db.config, nextOrden: 1, fact: { ...db.config.fact, numB: 1, numF: 1 } }; db = blank(); db.config = cfg; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
     });
     $('#imp').onchange = e => {
       const file = e.target.files[0]; if (!file) return;
       file.text().then(t => {
         let data; try { data = JSON.parse(t); if (!data.config || !data.pacientes) throw 0; } catch (err) { toast('El archivo no es un respaldo válido'); return; }
-        dual(`Restaurar respaldo (${data.pacientes.length} pacientes, ${data.ordenes.length} órdenes). Se reemplazan los datos actuales.`, () => { db = Object.assign(blank(), data); save(); toast('Respaldo restaurado'); render(); });
+        dual(`Restaurar respaldo (${data.pacientes.length} pacientes, ${data.ordenes.length} órdenes). Se reemplazan los datos actuales.`, () => { db = normDb(Object.assign(blank(), data)); save(); toast('Respaldo restaurado'); render(); });
       });
     };
   },

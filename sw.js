@@ -1,6 +1,6 @@
 // Permite abrir el sistema sin internet: primero intenta la red y, si no hay, usa la copia guardada.
-const CACHE = 'optica-v1';
-const FILES = ['./', './index.html', './app.js', './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
+const CACHE = 'optica-v2';
+const FILES = ['./', './index.html', './app.js', './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './jspdf.umd.min.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
