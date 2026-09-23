@@ -104,8 +104,8 @@ try { user = sessionStorage.getItem(SESSION); } catch (e) { }
 
 function blank() {
   return {
-    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, nextMontura: 1, socios: [], fact: FACT_DEF(), abrev: ABREV_DEF(), tarifasV: 1 },
-    pacientes: [], medidas: [], monturas: [], cristales: [], tarifas: tarifasDef(), ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [], comprobantes: [],
+    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, nextMontura: 1, socios: [], fact: FACT_DEF(), abrev: ABREV_DEF(), tarifasV: 1, productosV: 1 },
+    pacientes: [], medidas: [], monturas: [], cristales: [], tarifas: tarifasDef(), productos: productosDef(), ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [], comprobantes: [],
   };
 }
 function load() {
@@ -121,6 +121,8 @@ function normDb(d) {
   // La lista de precios de lunas se carga una sola vez; después solo la cambia el dueño.
   if (!d.config.tarifasV) { if (!d.tarifas || !d.tarifas.length) d.tarifas = tarifasDef(); d.config.tarifasV = 1; }
   d.tarifas = d.tarifas || [];
+  if (!d.config.productosV) { if (!d.productos || !d.productos.length) d.productos = productosDef(); d.config.productosV = 1; }
+  d.productos = d.productos || [];
   const ab = ABREV_DEF(); d.config.abrev = Object.assign(ab, d.config.abrev || {});
   const deTabla = s => (ab.color.find(([n]) => n.toLowerCase() === s.toLowerCase()) || [s])[0];
   d.monturas.forEach(m => {
@@ -684,7 +686,8 @@ routes['nueva-orden'] = {
           <div class="card"><div class="card-h"><h3>2 · Productos</h3></div><div class="card-b">
             <div class="fg"><div class="fld">Montura<div class="search" style="max-width:none">${icon('search')}<input id="mcode" placeholder="N° de varilla, marca o sigla…" autocomplete="off"><div class="sr" id="mres" hidden></div></div></div>
             <label class="f">Lunas<select class="inp" id="csel"><option value="">Elegir tipo de luna…</option>${gruposTarifa().map(([g, ts]) => `<optgroup label="${esc(g)}">${ts.map(t => `<option value="t:${t.id}">${esc(t.nombre)}</option>`).join('')}</optgroup>`).join('')}
-              ${db.cristales.length ? `<optgroup label="Otros cristales (precio fijo)">${db.cristales.map(c => `<option value="c:${c.id}">${esc(c.nombre)} — ${money(c.precio)}</option>`).join('')}</optgroup>` : ''}</select></label></div>
+              ${db.cristales.length ? `<optgroup label="Otros cristales (precio fijo)">${db.cristales.map(c => `<option value="c:${c.id}">${esc(c.nombre)} — ${money(c.precio)}</option>`).join('')}</optgroup>` : ''}</select></label>
+            <label class="f">Repuestos y otros<select class="inp" id="psel"><option value="">Elegir repuesto, accesorio o servicio…</option>${gruposProducto().map(([g, ps]) => `<optgroup label="${esc(g)}">${ps.map(p => `<option value="${p.id}">${esc(p.nombre)} — ${money(p.precio)}${conStock(p) ? ` · stock ${p.stock}` : ''}</option>`).join('')}</optgroup>`).join('')}</select></label></div>
             <div id="lpanel"></div>
             <div class="tbl-wrap mt"><table class="items"><thead><tr><th>Descripción</th><th class="c" style="width:70px">Cant.</th><th class="r" style="width:120px">Precio</th><th class="r" style="width:110px">Subtotal</th><th style="width:40px"></th></tr></thead><tbody id="itbody"></tbody></table></div>
             <button class="btn sm mt-s" id="addo">${icon('plus')} Otro producto o servicio</button>
@@ -746,12 +749,14 @@ routes['nueva-orden'] = {
         <select class="inp sm" id="lfila" aria-label="Rango">${fila < 0 ? '<option value="-1" selected>Elige el rango…</option>' : ''}${t.filas.map((f, i) => `<option value="${i}" ${i === fila ? 'selected' : ''}>${esc(filaTexto(f))}${i === auto ? ' ✓' : ''}</option>`).join('')}</select>
         <div class="small muted">${aviso}</div>
         <div class="pick" id="lcols">${botones || '<span class="muted small">Elige el rango para ver los precios.</span>'}</div>
-        ${botones ? '<div class="hint">Toca el tratamiento para agregarlo a la venta.</div>' : ''}</div>`;
+        ${botones ? '<div class="hint">Toca el tratamiento para agregarlo a la venta.</div>' : ''}
+        ${extrasLuna().length ? `<div class="fld">Extras<div class="pick" id="lext">${extrasLuna().map(p => `<button type="button" data-p="${p.id}">${icon('plus')} ${esc(p.nombre)} <small>${money(p.precio)}</small></button>`).join('')}</div></div>` : ''}</div>`;
+      $$('#lext [data-p]').forEach(b => b.onclick = () => { agregarProducto(producto(b.dataset.p)); b.classList.add('on'); });
       $('#lfila').onchange = e => { fSel = +e.target.value; panel(); };
       $$('#lcols [data-j]').forEach(b => b.onclick = () => {
         const j = +b.dataset.j;
         draft.items.push({ tipo: 'luna', ref: t.id, col: j, fila, auto: fila === auto, desc: descLuna(t, fila, j), cant: 1, precio: precioTarifa(t, fila, j) });
-        tSel = null; fSel = null; $('#csel').value = ''; panel(); drawItems();
+        b.classList.add('on'); drawItems(); // el panel queda abierto para agregar un extra (color)
       });
     };
     // Si cambia la medida, las lunas que se pusieron solas se vuelven a calcular.
@@ -773,6 +778,12 @@ routes['nueva-orden'] = {
       draft.items.push({ tipo: 'cristal', ref: c.id, desc: 'Cristales ' + c.nombre, cant: 1, precio: c.precio });
       $('#csel').value = ''; drawItems();
     };
+    const agregarProducto = p => {
+      if (!p) return;
+      if (conStock(p) && num(p.stock) <= 0) toast(`Atención: ${p.nombre} figura sin stock`);
+      draft.items.push({ tipo: 'producto', ref: p.id, desc: p.nombre, cant: 1, precio: p.precio }); drawItems();
+    };
+    $('#psel').onchange = () => { agregarProducto(producto($('#psel').value)); $('#psel').value = ''; };
     repreciar();
     $('#addo').onclick = () => { draft.items.push({ tipo: 'otro', desc: '', cant: 1, precio: '' }); drawItems(); $$('#itbody [data-k=desc]').pop().focus(); };
     if (p) {
@@ -805,7 +816,7 @@ routes['nueva-orden'] = {
       const tot = totalOrden(o), ab = Math.min(num(f.abono), tot);
       db.ordenes.push(o);
       if (ab > 0) db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto: round2(ab), metodo: f.metodo, por: user, ts: Date.now(), tipo: 'abono' });
-      items.filter(i => i.tipo === 'montura').forEach(i => { const m = db.monturas.find(x => x.id === i.ref); if (m) m.stock = num(m.stock) - i.cant; });
+      moverStock(items, -1);
       save(); draft = null; toast(`Orden N° ${pad(o.numero)} registrada`); go('#/orden/' + o.id);
       if (f.cptipo) emitirForm(o, f.cptipo);
     };
@@ -871,7 +882,7 @@ routes.orden = {
     });
     $('#oedit').onclick = () => dual(`Corregir productos o precios de la orden N° ${pad(o.numero)}`, () => ordenEdit(o));
     $('#odel').onclick = () => dual(`Anular la orden N° ${pad(o.numero)} y sus pagos`, () => {
-      o.items.filter(i => i.tipo === 'montura').forEach(i => { const m = db.monturas.find(x => x.id === i.ref); if (m) m.stock = num(m.stock) + i.cant; });
+      moverStock(o.items, +1);
       db.pagos = db.pagos.filter(x => x.ordenId !== o.id); db.ordenes = db.ordenes.filter(x => x !== o); save(); toast('Orden anulada'); go('#/ordenes');
     });
     $('#ocp').onclick = () => { const cp = comprobanteDe(o.id); cp ? comprobanteView(cp) : emitirForm(o); };
@@ -911,7 +922,9 @@ function ordenEdit(o) {
     onMount: bg => {
       $('#oe', bg).onsubmit = e => {
         e.preventDefault(); const f = readForm(e.target);
+        moverStock(o.items, +1); // si cambian las cantidades, el stock se corrige
         o.items = items.map((i, k) => ({ ...i, desc: f['d' + k], cant: num(f['c' + k]), precio: num(f['p' + k]) })).filter(i => i.cant > 0);
+        moverStock(o.items, -1);
         Object.assign(o, { descuento: num(f.descuento), entrega: f.entrega, notas: f.notas });
         save(); closeModal(); toast('Orden actualizada'); render();
       };
@@ -1373,6 +1386,8 @@ const abrMarca = marca => alnum(marca).slice(0, 4).toUpperCase();
 // Si la marca ya se usó, se repite la sigla que se le puso antes.
 const abrMarcaUsada = marca => (db.monturas.find(x => x.marcaAbr && alnum(x.marca) === alnum(marca)) || {}).marcaAbr || abrMarca(marca);
 function siglaMontura(m) {
+  // Lentes de sol: SOL + marca + colores completos, ej. SOLPUMA NEGRO
+  if (m.clase === 'sol') return ['SOL' + (m.marcaAbr || abrMarca(m.marca)), (m.colores || []).map(c => c.toUpperCase()).join('/')].filter(Boolean).join(' ');
   const gm = [abr('genero', m.genero), abr('material', m.material)].filter(Boolean).join('.');
   const fa = [abr('forma', m.forma), abr('aro', m.aro)].filter(Boolean).join('/');
   const col = (m.colores || []).map(c => abr('color', c)).join('/');
@@ -1381,7 +1396,7 @@ function siglaMontura(m) {
 const varillaDe = m => [m.varilla, m.colorCod].filter(Boolean).join(' ');
 const coloresDe = m => (m.colores || []).join(' / ') || m.color || '';
 const infoMontura = m => [[m.marca, m.modelo].filter(Boolean).join(' '), varillaDe(m) && 'varilla ' + varillaDe(m), coloresDe(m)].filter(Boolean).join(' · ');
-const descMontura = m => `Montura ${[m.marca, m.modelo, varillaDe(m)].filter(Boolean).join(' ')}${coloresDe(m) ? ' · ' + coloresDe(m) : ''} (${m.codigo})`;
+const descMontura = m => `${m.clase === 'sol' ? 'Lentes de sol' : 'Montura'} ${[m.marca, m.modelo, varillaDe(m)].filter(Boolean).join(' ')}${coloresDe(m) ? ' · ' + coloresDe(m) : ''} (${m.codigo})`;
 const chipStock = m => num(m.stock) <= 0 ? 'deuda' : num(m.stock) <= 1 ? 'pend' : 'plain';
 // "4321 C2" → varilla 4321, color de fábrica C2; si no son números se toma como marca.
 function varillaDeTexto(q) {
@@ -1398,7 +1413,7 @@ function buscarMonturas(q) {
   if (!toks.length) return db.monturas.slice();
   return db.monturas.map(m => {
     const vc = alnum(m.varilla + (m.colorCod || ''));
-    const texto = sinTilde([m.codigo, m.marca, m.modelo, siglaMontura(m), m.varilla, m.colorCod, m.genero, m.material, m.forma, m.aro, coloresDe(m)].join(' '));
+    const texto = sinTilde([m.codigo, m.marca, m.modelo, siglaMontura(m), m.varilla, m.colorCod, m.genero, m.material, m.forma, m.aro, coloresDe(m), m.clase === 'sol' ? 'lentes de sol solar' : 'montura'].join(' '));
     const pts = alnum(m.codigo) === qa || (vc && vc === qa) ? 3 : vc && qa.length >= 3 && vc.startsWith(qa) ? 2 : toks.every(t => texto.includes(t)) ? 1 : 0;
     return [m, pts];
   }).filter(x => x[1]).sort((a, b) => b[1] - a[1] || a[0].codigo.localeCompare(b[0].codigo, 'es', { numeric: true })).map(x => x[0]);
@@ -1406,7 +1421,7 @@ function buscarMonturas(q) {
 // Misma marca y mismo código de varilla (o, sin varilla, misma descripción): es la misma montura.
 function monturaIgual(f, excepto) {
   if (!f.marca) return null;
-  return db.monturas.find(x => x !== excepto && alnum(x.marca) === alnum(f.marca) && (f.varilla
+  return db.monturas.find(x => x !== excepto && (x.clase || '') === (f.clase || '') && alnum(x.marca) === alnum(f.marca) && (f.varilla
     ? alnum(x.varilla) === alnum(f.varilla) && alnum(x.colorCod) === alnum(f.colorCod)
     : !x.varilla && alnum(x.modelo) === alnum(f.modelo) && siglaMontura(x) === siglaMontura(f)));
 }
@@ -1558,6 +1573,54 @@ function tarifaForm(t) {
   });
 }
 
+// ---------- Repuestos y otros productos ----------
+// Lista de Jorge (foto del 23/09). El stock es opcional: vacío = no se lleva control.
+function productosDef() {
+  const rep = [['Topes', 15], ['Mantenimiento', 10], ['Varillas (par)', 60], ['Plaquetas (par)', 5], ['Terminales (par)', 40], ['Puente teléfono', 15],
+    ['Varillas niño de goma (par)', 60], ['Plaquetas niño de goma (par)', 25], ['Tuercas (unidad)', 3], ['Tornillos (unidad)', 3], ['Soldadura plástica', 20],
+    ['Soldadura por punto', 18], ['Nylon', 10], ['Flex tambor', 18], ['Pase', 10], ['Flex', 20], ['Sujetador simple', 3], ['Sujetador deportivo', 20],
+    ['Sujetador dama con pedrería', 25], ['Fórmula para lavar gafas', 10], ['Estuche cofre', 10], ['Estuche grande cofre y deportivo', 20]];
+  return [...rep.map(([nombre, precio], i) => ({ id: 'rep-' + (i + 1), grupo: 'Repuestos', nombre, precio, stock: '' })),
+    { id: 'luna-color', grupo: 'Extras de lunas', nombre: 'Color de lunas completo', precio: 30, stock: '' }];
+}
+const producto = id => db.productos.find(p => p.id === id);
+const conStock = p => String(p.stock ?? '').trim() !== '';
+const extrasLuna = () => db.productos.filter(p => /luna/i.test(p.grupo));
+function gruposProducto() {
+  const g = new Map(); db.productos.forEach(p => { if (!g.has(p.grupo)) g.set(p.grupo, []); g.get(p.grupo).push(p); });
+  return [...g.entries()];
+}
+// Resta (signo -1) o devuelve (+1) el stock de monturas y productos de una venta.
+function moverStock(items, signo) {
+  items.forEach(i => {
+    const x = i.tipo === 'montura' ? db.monturas.find(m => m.id === i.ref) : i.tipo === 'producto' ? producto(i.ref) : null;
+    if (x && (i.tipo === 'montura' || conStock(x))) x.stock = num(x.stock) + signo * num(i.cant);
+  });
+}
+function productoForm(p) {
+  const e = p || { grupo: 'Repuestos', stock: '' };
+  const grupos = [...new Set(db.productos.map(x => x.grupo))];
+  modal({
+    title: p ? 'Editar producto' : 'Nuevo producto',
+    body: `<form id="pf" class="form"><label class="f">Nombre<input class="inp" name="nombre" required value="${esc(e.nombre)}" placeholder="Ej. Tornillos (unidad)"></label>
+      <div class="fg"><label class="f">Grupo<input class="inp" name="grupo" list="pgrupos" required value="${esc(e.grupo)}"><datalist id="pgrupos">${grupos.map(g => `<option value="${esc(g)}">`).join('')}</datalist></label>
+      <label class="f">Precio<input class="inp" name="precio" inputmode="decimal" required value="${esc(e.precio)}"></label>
+      <label class="f">Stock <span class="hint">(déjalo vacío si no llevas la cuenta)</span><input class="inp" name="stock" inputmode="numeric" value="${esc(e.stock)}"></label></div>
+      <p class="hint" style="margin:0">Los productos del grupo “Extras de lunas” salen como opción al elegir las lunas en la venta. Agregar o cambiar precios pide la clave del dueño.</p></form>`,
+    foot: `${p ? `<button class="btn danger" id="pdel" style="margin-right:auto">${icon('trash')}</button>` : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" form="pf">Guardar</button>`,
+    onMount: bg => {
+      $('#pf', bg).onsubmit = ev => {
+        ev.preventDefault();
+        const f = readForm(ev.target); f.precio = num(f.precio); f.stock = f.stock === '' ? '' : num(f.stock);
+        const doit = () => { if (p) Object.assign(p, f); else db.productos.push({ id: uid(), ...f }); save(); closeModal(); toast('Producto guardado'); render(); };
+        !p ? pideDueno(`Agregar "${f.nombre}" a ${money(f.precio)}`, doit)
+          : num(p.precio) !== f.precio ? pideDueno(`Cambiar precio de "${p.nombre}": ${money(p.precio)} → ${money(f.precio)}`, doit) : doit();
+      };
+      $('#pdel', bg) && ($('#pdel', bg).onclick = () => pideDueno(`Eliminar "${p.nombre}"`, () => { db.productos = db.productos.filter(x => x !== p); save(); render(); }));
+    },
+  });
+}
+
 // ---------- Clave del dueño ----------
 // Ajustes y la lista de precios solo se abren con la clave del dueño; solo él la puede cambiar.
 let ajustesAbierto = false;
@@ -1611,10 +1674,10 @@ let invTab = 'monturas';
 routes.inventario = {
   html() {
     const bajo = db.monturas.filter(m => num(m.stock) <= 1).length;
-    return `<div class="page-head"><div><h1>Inventario</h1><p>${db.monturas.length} monturas · ${db.monturas.reduce((s, m) => s + Math.max(0, num(m.stock)), 0)} unidades${bajo ? ` · <span style="color:var(--danger)">${bajo} con stock bajo</span>` : ''}</p></div>
-      <div class="actions">${invTab === 'monturas' ? `<button class="btn accent" id="ingreso">${icon('box')} Llegó mercadería</button>` : ''}<button class="btn primary" id="newi">${icon('plus')} ${invTab === 'monturas' ? 'Nueva montura' : 'Nueva lista'}</button></div></div>
-      <div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="iseg"><button data-k="monturas" class="${invTab === 'monturas' ? 'on' : ''}">Monturas</button><button data-k="cristales" class="${invTab === 'cristales' ? 'on' : ''}">Lista de precios de lunas</button></div>
-      <input class="inp" id="if" style="flex:1;min-width:200px" placeholder="${invTab === 'monturas' ? 'Buscar varilla, marca, sigla o código…' : 'Buscar tipo de luna o tratamiento…'}"></div><div id="ilist"></div></div>`;
+    return `<div class="page-head"><div><h1>Inventario</h1><p>${db.monturas.filter(m => m.clase !== 'sol').length} monturas · ${((n) => `${n} ${n === 1 ? 'lente' : 'lentes'} de sol`)(db.monturas.filter(m => m.clase === 'sol').length)} ·${db.monturas.reduce((s, m) => s + Math.max(0, num(m.stock)), 0)} unidades${bajo ? ` · <span style="color:var(--danger)">${bajo} con stock bajo</span>` : ''}</p></div>
+      <div class="actions">${invTab === 'monturas' ? `<button class="btn accent" id="ingreso">${icon('box')} Llegó mercadería</button>` : ''}<button class="btn primary" id="newi">${icon('plus')} ${{ monturas: 'Montura o lente de sol', cristales: 'Nueva lista', productos: 'Nuevo producto' }[invTab]}</button></div></div>
+      <div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="iseg">${[['monturas', 'Monturas y lentes de sol'], ['cristales', 'Precios de lunas'], ['productos', 'Repuestos y otros']].map(([k, t]) => `<button data-k="${k}" class="${invTab === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+      <input class="inp" id="if" style="flex:1;min-width:200px" placeholder="${{ monturas: 'Buscar varilla, marca, sigla o código…', cristales: 'Buscar tipo de luna o tratamiento…', productos: 'Buscar repuesto, accesorio o servicio…' }[invTab]}"></div><div id="ilist"></div></div>`;
   },
   bind() {
     const draw = () => {
@@ -1626,6 +1689,13 @@ routes.inventario = {
           <td class="c"><span class="chip ${chipStock(m)}">${m.stock}</span></td><td class="r"><button class="btn sm" data-add="${m.id}" title="Sumar unidades">${icon('plus')}<span class="hide-sm">Stock</span></button></td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${icon('box')}<div>No hay monturas.</div></div>`;
         $$('#ilist [data-id]').forEach(r => r.onclick = e => { if (!e.target.closest('[data-add]')) monturaForm(db.monturas.find(x => x.id === r.dataset.id)); });
         $$('#ilist [data-add]').forEach(b => b.onclick = () => stockForm(db.monturas.find(x => x.id === b.dataset.add)));
+      } else if (invTab === 'productos') {
+        const ps = db.productos.filter(p => !f || sinTilde([p.nombre, p.grupo].join(' ')).includes(f));
+        const grupos = [...new Set(ps.map(p => p.grupo))];
+        $('#ilist').innerHTML = ps.length ? `<div class="card-b" style="padding-top:4px">${grupos.map(g => `<h3 class="tgrupo">${esc(g)}</h3><div class="tbl-wrap"><table><thead><tr><th>Producto</th><th class="r">Precio</th><th class="c">Stock</th></tr></thead><tbody>
+          ${ps.filter(p => p.grupo === g).map(p => `<tr class="link" data-id="${p.id}"><td><b>${esc(p.nombre)}</b></td><td class="r num">${money(p.precio)}</td><td class="c">${conStock(p) ? `<span class="chip ${chipStock(p)}">${p.stock}</span>` : '<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table></div>`).join('')}
+          <p class="hint">Agregar productos o cambiar precios pide la clave del dueño. El stock es opcional.</p></div>` : `<div class="empty">No hay productos.</div>`;
+        $$('#ilist [data-id]').forEach(r => r.onclick = () => productoForm(producto(r.dataset.id)));
       } else {
         const ts = db.tarifas.filter(t => !f || sinTilde([t.grupo, t.nombre, ...t.cols].join(' ')).includes(f));
         const l = db.cristales.filter(c => !f || sinTilde([c.nombre, c.tipo].join(' ')).includes(f));
@@ -1647,7 +1717,7 @@ routes.inventario = {
     };
     $$('#iseg button').forEach(b => b.onclick = () => { invTab = b.dataset.k; render(); });
     $('#if').oninput = draw; draw();
-    $('#newi').onclick = () => invTab === 'monturas' ? monturaForm() : pideDueno('Crear una lista de precios de lunas', () => tarifaForm());
+    $('#newi').onclick = () => invTab === 'monturas' ? monturaForm() : invTab === 'productos' ? productoForm() : pideDueno('Crear una lista de precios de lunas', () => tarifaForm());
     $('#ingreso') && ($('#ingreso').onclick = () => ingresoForm());
   },
 };
@@ -1694,13 +1764,14 @@ function stockForm(m, cant = 1) {
 }
 function monturaForm(m, pre) {
   const e = m ? { ...m } : { stock: 1, codigo: nuevoCodigo(), ...(pre || {}) };
-  const sel = { genero: e.genero || '', material: e.material || '', forma: e.forma || '', aro: e.aro || '', colores: [...(e.colores || [])] };
+  const sel = { clase: e.clase || '', genero: e.genero || '', material: e.material || '', forma: e.forma || '', aro: e.aro || '', colores: [...(e.colores || [])] };
   if (!e.marcaAbr && e.marca) e.marcaAbr = abrMarcaUsada(e.marca);
   let abrManual = !!(e.marcaAbr && e.marcaAbr !== abrMarcaUsada(e.marca));
   const marcas = [...new Set(db.monturas.map(x => x.marca).filter(Boolean))].sort();
   modal({
-    title: m ? 'Montura ' + esc(m.codigo) : 'Nueva montura', wide: true,
+    title: m ? (m.clase === 'sol' ? 'Lente de sol ' : 'Montura ') + esc(m.codigo) : 'Nueva montura o lente de sol', wide: true,
     body: `<form id="mf" class="form">
+      <div class="seg" id="mclase"><button type="button" data-c="" class="${sel.clase ? '' : 'on'}">Montura</button><button type="button" data-c="sol" class="${sel.clase === 'sol' ? 'on' : ''}">Lente de sol</button></div>
       <div class="sigla-box"><span class="small">Así queda</span><b class="sigla" id="msig"></b></div>
       <div class="fg"><label class="f">Marca<input class="inp" name="marca" list="mmarcas" required autocomplete="off" value="${esc(e.marca)}" placeholder="Ej. Fellis"><datalist id="mmarcas">${marcas.map(x => `<option value="${esc(x)}">`).join('')}</datalist></label>
         <label class="f">Sigla de la marca <span class="hint">(se pone sola, puedes cambiarla)</span><input class="inp up" name="marcaAbr" maxlength="6" autocomplete="off" value="${esc(e.marcaAbr)}"></label></div>
@@ -1732,6 +1803,9 @@ function monturaForm(m, pre) {
         $('#mdupadd', bg) && ($('#mdupadd', bg).onclick = () => { closeModal(); stockForm(d, Math.max(1, num(campo('stock').value) || 1)); });
       };
       const pintar = () => {
+        // Los lentes de sol solo llevan marca, color y varilla.
+        ['genero', 'material', 'forma', 'aro'].forEach(g => { $(`[data-g="${g}"]`, bg).parentNode.hidden = sel.clase === 'sol'; });
+        $$('#mclase button', bg).forEach(b => b.classList.toggle('on', b.dataset.c === sel.clase));
         ABREV_GRUPOS.forEach(([g]) => {
           const act = g === 'color' ? sel.colores : [sel[g]].filter(Boolean);
           const opts = abrev()[g].map(x => x[0]);
@@ -1744,6 +1818,7 @@ function monturaForm(m, pre) {
         actualizar();
       };
       form.addEventListener('click', ev => {
+        const c = ev.target.closest('#mclase button'); if (c) { sel.clase = c.dataset.c; pintar(); return; }
         const b = ev.target.closest('.pick button'); if (!b) return;
         const g = b.parentNode.dataset.g, v = b.dataset.v;
         if (g === 'color') { const i = sel.colores.findIndex(a => sinTilde(a) === sinTilde(v)); i >= 0 ? sel.colores.splice(i, 1) : sel.colores.push(v); }
@@ -1766,6 +1841,7 @@ function monturaForm(m, pre) {
         ev.preventDefault();
         const f = estado(); f.precio = num(f.precio); f.stock = num(f.stock); f.costo = f.costo ? num(f.costo) : '';
         f.codigo = f.codigo.toUpperCase(); f.color = f.colores.join(' / ');
+        if (f.clase === 'sol') Object.assign(f, { genero: '', material: '', forma: '', aro: '' });
         const cod = db.monturas.find(x => x !== m && x.codigo.toLowerCase() === f.codigo.toLowerCase());
         if (cod && m) { toast('Ya existe otra montura con ese código'); return; }
         const registrar = () => {
@@ -1978,8 +2054,8 @@ routes.ajustes = {
       const ok = await saveFile(`respaldo-${(db.config.nombre || 'optica').toLowerCase().replace(/\s+/g, '-')}-${hoy()}.json`, JSON.stringify(db));
       if (ok) { db.config.ultimoRespaldo = Date.now(); save(); render(); }
     };
-    $('#reset').onclick = () => dual('Borrar pacientes, órdenes, caja e inventario (se conservan los socios, los datos de la óptica y la lista de precios de lunas)', () => {
-      const cfg = { ...db.config, nextOrden: 1, nextMontura: 1, fact: { ...db.config.fact, numB: 1, numF: 1 } }, tar = db.tarifas; db = blank(); db.config = cfg; db.tarifas = tar; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
+    $('#reset').onclick = () => dual('Borrar pacientes, órdenes, caja e inventario (se conservan los socios, los datos de la óptica y las listas de precios)', () => {
+      const cfg = { ...db.config, nextOrden: 1, nextMontura: 1, fact: { ...db.config.fact, numB: 1, numF: 1 } }, tar = db.tarifas, prod = db.productos; db = blank(); db.config = cfg; db.tarifas = tar; db.productos = prod; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
     });
     $('#imp').onchange = e => {
       const file = e.target.files[0]; if (!file) return;
@@ -2066,7 +2142,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.23.5';
+const APP_VERSION = '2026.09.23.6';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
