@@ -1138,6 +1138,74 @@ function emisorLineas(F) {
   ].filter(Boolean);
 }
 
+// Hoja para contar el inventario a mano: lo que dice el sistema y columnas en blanco para el conteo.
+async function inventarioPDF() {
+  const { jsPDF } = await loadJsPDF();
+  const doc = new jsPDF({ compress: true, unit: 'mm', format: 'a4' });
+  const M = 12, W = 210, H = 297, R = W - M;
+  // columnas: N°, código, descripción, precio, stock del sistema, conteo, diferencia
+  const X = { n: M, cod: M + 9, desc: M + 30, precio: 136, sis: 152, cont: 166, dif: 184 };
+  const ahora = new Date();
+  let y = 0, pag = 0;
+  const encabezado = () => {
+    pag++; y = 14;
+    pdfText(doc, 'Inventario para conteo manual', M, y, { b: true, s: 15 });
+    pdfText(doc, db.config.nombre || '', R, y, { b: true, s: 11, a: 'right', c: PDF_TEAL });
+    y += 6;
+    pdfText(doc, `Stock según el sistema al ${ahora.toLocaleString('es-PE', { dateStyle: 'long', timeStyle: 'short' })}`, M, y, { s: 9, c: PDF_GRAY });
+    y += 7;
+  };
+  const cabecera = () => {
+    doc.setFillColor(...PDF_NAVY); doc.rect(M, y, R - M, 7, 'F');
+    const t = (s, x, a) => pdfText(doc, s, x, y + 4.8, { b: true, s: 8, c: [255, 255, 255], a });
+    t('N°', X.n + 1); t('Código', X.cod); t('Descripción', X.desc); t('Precio', X.sis - 3, 'right'); t('Sistema', X.sis + 7, 'center'); t('Conteo', X.cont + 9, 'center'); t('Dif.', X.dif + 7, 'center');
+    y += 7;
+  };
+  const salto = alto => { if (y + alto > H - 16) { doc.addPage(); encabezado(); cabecera(); } };
+  const seccion = (titulo, filas, nota) => {
+    salto(22);
+    y += 3; pdfText(doc, `${titulo} (${filas.length})`, M, y + 4, { b: true, s: 11, c: PDF_TEAL });
+    if (nota) pdfText(doc, nota, R, y + 4, { s: 8, c: PDF_GRAY, a: 'right' });
+    y += 7;
+    cabecera();
+    if (!filas.length) { pdfText(doc, 'No hay registros.', X.desc, y + 5, { s: 9, c: PDF_GRAY }); y += 8; return; }
+    filas.forEach((f, i) => {
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
+      const sub = f.sub ? doc.splitTextToSize(f.sub, X.precio - X.desc - 24) : [];
+      const alto = sub.length ? 7.5 + sub.length * 3.2 : 8;
+      salto(alto);
+      if (i % 2) { doc.setFillColor(248, 246, 241); doc.rect(M, y, R - M, alto, 'F'); }
+      pdfText(doc, i + 1, X.n + 1, y + 5, { s: 8, c: PDF_GRAY });
+      pdfText(doc, f.cod, X.cod, y + 5, { s: 8 });
+      pdfText(doc, f.titulo, X.desc, y + 5, { b: true, s: 8.5 });
+      sub.forEach((l, k) => pdfText(doc, l, X.desc, y + 8.6 + k * 3.2, { s: 7.5, c: PDF_GRAY }));
+      pdfText(doc, f.precio, X.sis - 3, y + 5, { s: 8, a: 'right' });
+      pdfText(doc, f.stock, X.sis + 7, y + 5, { b: true, s: 9, a: 'center' });
+      // casillas en blanco para escribir a mano
+      doc.setDrawColor(...PDF_GRAY); doc.setLineWidth(0.25);
+      doc.rect(X.cont + 1, y + 1.2, 16, alto - 2.4); doc.rect(X.dif + 1, y + 1.2, 12, alto - 2.4);
+      doc.setDrawColor(...PDF_LINE); doc.line(M, y + alto, R, y + alto);
+      y += alto;
+    });
+    const uni = filas.reduce((s, f) => s + (typeof f.n === 'number' ? f.n : 0), 0);
+    y += 5; pdfText(doc, `Total en sistema: ${uni} unidades`, X.sis + 14, y, { b: true, s: 8.5, a: 'right' }); y += 3;
+  };
+  const orden = (a, b) => a.codigo.localeCompare(b.codigo, 'es', { numeric: true });
+  const fMont = m => ({ cod: m.codigo, titulo: siglaMontura(m), sub: infoMontura(m), precio: money(m.precio), stock: String(num(m.stock)), n: num(m.stock) });
+  encabezado();
+  seccion('Monturas', db.monturas.filter(m => m.clase !== 'sol').sort(orden).map(fMont));
+  seccion('Lentes de sol', db.monturas.filter(m => m.clase === 'sol').sort(orden).map(fMont));
+  const grupos = {}; accesorios().forEach(p => { (grupos[p.grupo] = grupos[p.grupo] || []).push(p); });
+  Object.entries(grupos).forEach(([g, ps]) => seccion(g, ps.map(p => ({ cod: '', titulo: p.nombre, sub: '', precio: money(p.precio), stock: conStock(p) ? String(num(p.stock)) : '—', n: conStock(p) ? num(p.stock) : null })),
+    ps.some(p => !conStock(p)) ? '— = el sistema no lleva la cuenta de ese producto' : ''));
+  salto(26); y += 10;
+  pdfText(doc, 'Contado por: ______________________________', M, y, { s: 10 }); pdfText(doc, 'Fecha: ______________', 120, y, { s: 10 });
+  y += 10; pdfText(doc, 'Firma: ______________________________', M, y, { s: 10 });
+  const total = doc.getNumberOfPages();
+  for (let i = 1; i <= total; i++) { doc.setPage(i); pdfText(doc, `Página ${i} de ${total}`, R, H - 8, { s: 8, c: PDF_GRAY, a: 'right' }); }
+  return doc.output('blob');
+}
+
 function drawA4(doc, c, F) {
   const M = 14, W = 210, R = W - M, k = cpCalc(c), fa = c.tipo === 'factura';
   let y = 14, tx = M;
@@ -1720,7 +1788,7 @@ routes.inventario = {
   html() {
     const bajo = db.monturas.filter(m => num(m.stock) <= 1).length;
     return `<div class="page-head"><div><h1>Inventario</h1><p>${db.monturas.filter(m => m.clase !== 'sol').length} monturas · ${((n) => `${n} ${n === 1 ? 'lente' : 'lentes'} de sol`)(db.monturas.filter(m => m.clase === 'sol').length)} ·${db.monturas.reduce((s, m) => s + Math.max(0, num(m.stock)), 0)} unidades${bajo ? ` · <span style="color:var(--danger)">${bajo} con stock bajo</span>` : ''}</p></div>
-      <div class="actions">${invTab === 'monturas' ? `<button class="btn accent" id="ingreso">${icon('box')} Llegó mercadería</button>` : ''}<button class="btn primary" id="newi">${icon('plus')} ${{ monturas: 'Montura o lente de sol', cristales: 'Nueva lista', productos: 'Nuevo producto' }[invTab]}</button></div></div>
+      <div class="actions"><button class="btn" id="invpdf">${icon('down')} PDF para conteo</button>${invTab === 'monturas' ? `<button class="btn accent" id="ingreso">${icon('box')} Llegó mercadería</button>` : ''}<button class="btn primary" id="newi">${icon('plus')} ${{ monturas: 'Montura o lente de sol', cristales: 'Nueva lista', productos: 'Nuevo producto' }[invTab]}</button></div></div>
       <div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="iseg">${[['monturas', 'Monturas y lentes de sol'], ['cristales', 'Precios de lunas'], ['productos', 'Accesorios y otros']].map(([k, t]) => `<button data-k="${k}" class="${invTab === k ? 'on' : ''}">${t}</button>`).join('')}</div>
       <input class="inp" id="if" style="flex:1;min-width:200px" placeholder="${{ monturas: 'Buscar varilla, marca, sigla o código…', cristales: 'Buscar tipo de luna o tratamiento…', productos: 'Buscar accesorio: tornillo, plaquetas, estuche…' }[invTab]}"></div><div id="ilist"></div></div>`;
   },
@@ -1764,6 +1832,9 @@ routes.inventario = {
     $('#if').oninput = draw; draw();
     $('#newi').onclick = () => invTab === 'monturas' ? monturaForm() : invTab === 'productos' ? productoForm() : pideDueno('Crear una lista de precios de lunas', () => tarifaForm());
     $('#ingreso') && ($('#ingreso').onclick = () => ingresoForm());
+    $('#invpdf').onclick = async () => {
+      try { await saveFile(`Inventario ${hoy()}.pdf`, await inventarioPDF()); } catch (err) { toast('No se pudo generar el PDF: ' + err.message); }
+    };
   },
 };
 // Llegó mercadería: se busca la montura; si ya existe se suman unidades, si no se registra nueva.
@@ -2191,7 +2262,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.23.7';
+const APP_VERSION = '2026.09.23.8';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
