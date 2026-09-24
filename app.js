@@ -108,7 +108,7 @@ try { user = sessionStorage.getItem(SESSION); } catch (e) { }
 
 function blank() {
   return {
-    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, nextMontura: 1, socios: [], fact: FACT_DEF(), abrev: ABREV_DEF(), tarifasV: 1, productosV: 2 },
+    config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, nextMontura: 1, socios: [], fact: FACT_DEF(), abrev: ABREV_DEF(), tarifasV: 1, productosV: 2, directaV: 1 },
     pacientes: [], medidas: [], monturas: [], cristales: [], tarifas: tarifasDef(), productos: productosDef(), anuladas: [], ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [], comprobantes: [],
   };
 }
@@ -132,6 +132,16 @@ function normDb(d) {
     d.config.productosV = 2;
   }
   d.anuladas = d.anuladas || [];
+  // Las ventas directas (sin lunas) ya pagadas que quedaron "En laboratorio" pasan a entregadas.
+  if (!d.config.directaV) {
+    d.ordenes.forEach(o => {
+      if (o.estado === 'entregado' || o.items.some(i => itemLab(i, d.monturas))) return;
+      const tot = o.items.reduce((s, i) => s + num(i.cant) * num(i.precio), 0) - num(o.descuento);
+      const pag = d.pagos.filter(p => p.ordenId === o.id).reduce((s, p) => s + num(p.monto), 0);
+      if (tot - pag <= 0.009) Object.assign(o, { estado: 'entregado', entregado: o.fecha, directa: true });
+    });
+    d.config.directaV = 1;
+  }
   const ab = ABREV_DEF(); d.config.abrev = Object.assign(ab, d.config.abrev || {});
   const deTabla = s => (ab.color.find(([n]) => n.toLowerCase() === s.toLowerCase()) || [s])[0];
   d.monturas.forEach(m => {
@@ -141,6 +151,14 @@ function normDb(d) {
   });
   return d;
 }
+// Lo que va al laboratorio: lunas, cristales y monturas ópticas (no lentes de sol ni accesorios).
+function itemLab(i, monturas) {
+  if (i.tipo === 'luna' || i.tipo === 'cristal') return true;
+  if (i.tipo === 'montura') return (monturas.find(m => m.id === i.ref) || {}).clase !== 'sol';
+  return i.tipo === 'otro' && /\b(lunas?|cristal|cristales|luna)\b/i.test(i.desc || '');
+}
+// Montos escritos como "S/ 150" o "150 soles" también valen.
+const numPago = v => num(String(v ?? '').replace(/[^\d.,]/g, ''));
 // La primera vez pone el logo de la óptica en los comprobantes; luego se puede cambiar en Ajustes.
 async function logoInicial() {
   const F = db && db.config.fact;
@@ -704,16 +722,18 @@ routes['nueva-orden'] = {
         </div>
         <div class="card" style="position:sticky;top:90px"><div class="card-h"><h3>3 · Pago</h3></div><div class="card-b">
           <form id="oform" class="form">
+            <div class="seg vtipo" id="vtipo"><button type="button" data-v="encargo">Encargo</button><button type="button" data-v="directa">Venta directa</button></div>
+            <div class="hint" id="vhint" style="margin-top:-6px"></div>
             <div class="totals"><div><span class="muted">Subtotal</span><b class="num" id="tsub">S/ 0.00</b></div>
             <div><span class="muted">Descuento</span><input class="inp sm num" name="descuento" id="tdesc" inputmode="decimal" style="width:110px;text-align:right" value="${esc(draft.descuento)}" placeholder="0.00"></div>
             <div class="big"><span>Total</span><span class="num" id="ttot">S/ 0.00</span></div></div>
-            <label class="f">A cuenta (abono)<input class="inp" name="abono" id="abono" inputmode="decimal" placeholder="0.00"></label>
+            <label class="f"><span id="labono">A cuenta (abono)</span><input class="inp" name="abono" id="abono" inputmode="decimal" placeholder="0.00"></label>
             <div class="pay-opts">${METODOS.map((m, i) => `<label><input type="radio" name="metodo" value="${m}" ${i === 0 ? 'checked' : ''}><span>${m}</span></label>`).join('')}</div>
             <div class="row between"><span class="muted">Resta</span><b class="num" id="tresta" style="font-size:18px">S/ 0.00</b></div>
-            <label class="f">Fecha de entrega<input class="inp" type="date" name="entrega" value="${esc(draft.entrega)}"></label>
-            <label class="f">Notas para el laboratorio<textarea class="inp" name="notas" placeholder="Tipo de armado, altura, observaciones…">${esc(draft.notas)}</textarea></label>
+            <div id="solo-encargo" class="form"><label class="f">Fecha de entrega<input class="inp" type="date" name="entrega" value="${esc(draft.entrega)}"></label>
+            <label class="f">Notas para el laboratorio<textarea class="inp" name="notas" placeholder="Tipo de armado, altura, observaciones…">${esc(draft.notas)}</textarea></label></div>
             <label class="f">Comprobante<select class="inp" name="cptipo">${[['nota', 'Nota de venta'], ['boleta', 'Boleta de venta'], ['factura', 'Factura'], ['', 'Ninguno por ahora']].map(([v, t]) => `<option value="${v}" ${v === (fact().ruc ? 'boleta' : 'nota') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
-            <button class="btn primary" style="padding:13px">${icon('check')} Registrar venta</button>
+            <button class="btn primary" style="padding:13px" id="ogo">${icon('check')} Registrar venta</button>
           </form></div></div>
       </div>`;
   },
@@ -733,8 +753,18 @@ routes['nueva-orden'] = {
       draft.descuento = $('#tdesc').value;
       const tot = round2(sub - num(draft.descuento));
       $('#tsub').textContent = money(sub); $('#ttot').textContent = money(tot);
-      $('#tresta').textContent = money(Math.max(0, tot - num($('#abono').value)));
+      // Venta directa: se cobra todo y se entrega en el momento. Se elige sola si no hay nada para el laboratorio.
+      const dir = esDirecta(), ab = $('#abono');
+      $$('#vtipo button').forEach(b => b.classList.toggle('on', (b.dataset.v === 'directa') === dir));
+      $('#vhint').textContent = dir ? 'Se cobra completo y queda entregada.' : 'Va al laboratorio: queda "En laboratorio" hasta que la entregues.';
+      $('#labono').textContent = dir ? 'Cobrado (pago completo)' : 'A cuenta (abono)';
+      if (dir) ab.value = Math.max(0, tot).toFixed(2); else if (ab.readOnly) ab.value = '';
+      ab.readOnly = dir; $('#solo-encargo').hidden = dir;
+      $('#ogo').innerHTML = `${icon('check')} ${dir ? 'Cobrar y entregar' : 'Registrar venta'}`;
+      $('#tresta').textContent = money(Math.max(0, tot - numPago(ab.value)));
     };
+    const esDirecta = () => draft.modo ? draft.modo === 'directa' : draft.items.length > 0 && !draft.items.some(i => itemLab(i, db.monturas));
+    $$('#vtipo button').forEach(b => b.onclick = () => { draft.modo = b.dataset.v; calc(); });
     $('#tdesc').oninput = calc; $('#abono').oninput = calc;
     buscadorMonturas($('#mcode'), $('#mres'), m => {
       if (num(m.stock) <= 0) toast('Atención: esta montura figura sin stock');
@@ -838,13 +868,27 @@ routes['nueva-orden'] = {
       if (!draft.pacienteId) { toast('Elige un paciente'); return; }
       const items = draft.items.filter(i => i.desc && num(i.precio) >= 0 && num(i.cant) > 0).map(i => ({ ...i, cant: num(i.cant), precio: num(i.precio) }));
       if (!items.length) { toast('Agrega al menos un producto'); return; }
-      const o = { id: uid(), numero: db.config.nextOrden++, pacienteId: draft.pacienteId, medidaId: draft.medidaId, fecha: hoy(), items, descuento: num(f.descuento), entrega: f.entrega, notas: f.notas, estado: 'pendiente', por: user, creado: Date.now() };
-      const tot = totalOrden(o), ab = Math.min(num(f.abono), tot);
-      db.ordenes.push(o);
-      if (ab > 0) db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto: round2(ab), metodo: f.metodo, por: user, ts: Date.now(), tipo: 'abono' });
-      moverStock(items, -1);
-      save(); draft = null; toast(`Orden N° ${pad(o.numero)} registrada`); go('#/orden/' + o.id);
-      if (f.cptipo) emitirForm(o, f.cptipo);
+      const dir = esDirecta();
+      const tot = round2(items.reduce((s, i) => s + i.cant * i.precio, 0) - num(f.descuento));
+      const registrar = monto => {
+        const o = { id: uid(), numero: db.config.nextOrden++, pacienteId: draft.pacienteId, medidaId: draft.medidaId, fecha: hoy(), items, descuento: num(f.descuento), entrega: dir ? hoy() : f.entrega, notas: dir ? '' : f.notas, estado: dir ? 'entregado' : 'pendiente', por: user, creado: Date.now() };
+        if (dir) Object.assign(o, { entregado: hoy(), directa: true });
+        const ab = round2(Math.min(monto, tot));
+        db.ordenes.push(o);
+        if (ab > 0) db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto: ab, metodo: f.metodo, por: user, ts: Date.now(), tipo: 'abono' });
+        moverStock(items, -1);
+        save(); draft = null; toast(dir ? `Venta N° ${pad(o.numero)} cobrada y entregada` : `Orden N° ${pad(o.numero)} registrada`); go('#/orden/' + o.id);
+        if (f.cptipo) emitirForm(o, f.cptipo);
+      };
+      if (dir) return registrar(tot);
+      const ab = numPago(f.abono);
+      if (ab > 0 || tot <= 0) return registrar(ab);
+      // Sin monto escrito: se pregunta, para que no quede "por cobrar" algo que ya se pagó.
+      modal({
+        title: '¿El cliente pagó algo?', body: `<p style="margin:0">No escribiste cuánto dejó a cuenta. El total es <b>${money(tot)}</b>.</p>`,
+        foot: `<button class="btn" id="nopago">Todavía no pagó</button><button class="btn accent" id="todo">${icon('check')} Pagó todo · ${esc(f.metodo)}</button>`,
+        onMount: bg => { $('#nopago', bg).onclick = () => { closeModal(); registrar(0); }; $('#todo', bg).onclick = () => { closeModal(); registrar(tot); }; },
+      });
     };
     drawItems();
   },
@@ -930,7 +974,7 @@ function cobrarForm(o) {
     onMount: bg => {
       $('#cf', bg).onsubmit = e => {
         e.preventDefault();
-        const f = readForm(e.target), monto = round2(Math.min(num(f.monto), s));
+        const f = readForm(e.target), monto = round2(Math.min(numPago(f.monto), s));
         if (monto <= 0) { toast('Monto inválido'); return; }
         const doit = () => { db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto, metodo: f.metodo, por: user, ts: Date.now(), tipo: 'saldo' }); save(); closeModal(); toast('Pago registrado'); render(); };
         fechaCerrada ? dual(`Registrar pago con la caja del ${fdate(hoy())} cerrada`, doit) : doit();
@@ -2266,7 +2310,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.23.9';
+const APP_VERSION = '2026.09.23.10';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
