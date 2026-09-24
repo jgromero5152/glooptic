@@ -251,6 +251,40 @@ textarea.inp{min-height:76px;resize:vertical}
 .locked{display:flex;align-items:center;gap:10px;padding:12px 16px;border-radius:12px;background:var(--gold-soft);color:var(--gold-ink);font-weight:500;font-size:14px}
 .locked svg{width:18px;height:18px}
 
+/* Reportes */
+.lnk{color:var(--accent);font-weight:600}
+.lnk:hover{text-decoration:underline}
+.delta{font-weight:600;color:var(--muted)}
+.delta.up{color:var(--ok)}
+.delta.down{color:var(--danger)}
+.bars{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:2px;height:190px;align-items:end;border-bottom:1px solid var(--line)}
+.bcol{height:100%;display:flex;align-items:flex-end;justify-content:center;background:none;border:0;padding:0 1px;cursor:pointer;border-radius:4px 4px 0 0}
+.bcol:hover,.bcol.sel{background:var(--line-2)}
+.bar{display:block;width:100%;max-width:38px;background:var(--accent);border-radius:4px 4px 0 0;opacity:.85}
+.bcol.hoy .bar,.bcol.sel .bar,.bcol:hover .bar{opacity:1}
+.blab{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:2px;margin-top:6px;font-size:11.5px;color:var(--muted);text-align:center;white-space:nowrap}
+.dona{position:relative;width:200px;height:200px;margin:4px auto 16px}
+.dona svg{width:100%;height:100%;display:block}
+.dona circle{transition:opacity .15s}
+.dona svg:hover circle{opacity:.5}
+.dona svg circle:hover{opacity:1}
+.dona-c{position:absolute;inset:0;display:grid;place-content:center;text-align:center;pointer-events:none}
+.dona-c b{font-size:16px;letter-spacing:-.02em}
+.bcap{margin:0 0 12px;font-size:13.5px;font-weight:500;color:var(--ink-2);min-height:20px}
+.dleg{display:grid;gap:2px}
+.dleg > div{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line-2);font-size:14px}
+.dleg > div:first-child{border-top:0}
+.dleg i{width:10px;height:10px;border-radius:3px;flex:none}
+.dleg .grow{flex:1}
+.dleg b{min-width:92px;text-align:right}
+.rango{display:grid;gap:12px;margin-bottom:18px}
+.rg-f{display:flex;gap:10px;align-items:end;flex-wrap:wrap}
+.rg-f .f{flex:1;min-width:140px}
+.hb + .hb{margin-top:14px}
+.hb .t{font-weight:600}
+.hb-track{height:8px;border-radius:8px;background:var(--line-2);margin:6px 0 2px;overflow:hidden}
+.hb-track span{display:block;height:100%;background:var(--accent);border-radius:8px}
+
 /* Modal */
 .modal-bg{position:fixed;inset:0;background:var(--backdrop);backdrop-filter:blur(3px);display:grid;place-items:center;z-index:100;padding:16px;animation:fade .15s}
 .modal{background:var(--surface);border-radius:14px;width:100%;max-width:560px;max-height:calc(100vh - 32px);overflow:auto;box-shadow:0 30px 80px -20px rgba(0,0,0,.35);animation:pop .18s}
@@ -373,6 +407,11 @@ textarea.inp{min-height:76px;resize:vertical}
   .page-head{margin-bottom:16px}
   .page-head .actions{width:100%}
   .page-head .actions .btn{flex:1 1 auto}
+  .page-head .actions .seg{flex:1 1 100%}
+  .page-head .actions .seg button{flex:1}
+  .page-head .actions .btn.icon{flex:0 0 auto}
+  .bars{height:150px}
+  .rg-f .btn{flex:1 1 100%}
   td,th{padding:10px 8px}
   .rx th,.rx td{padding:8px 3px;font-size:13.5px}
   .rx th{font-size:10px;letter-spacing:.02em}
@@ -401,6 +440,6 @@ textarea.inp{min-height:76px;resize:vertical}
 <body>
 <div id="root"></div>
 <div id="print"></div>
-<script src="app.js?v=2026.09.23.10"></script>
+<script src="app.js?v=2026.09.23.11"></script>
 </body>
 </html>

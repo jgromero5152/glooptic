@@ -6,7 +6,9 @@
 const KEY = 'optica-db-v1';
 const SESSION = 'optica-user';
 const METODOS = ['Efectivo', 'Yape', 'Plin', 'Tarjeta', 'Transferencia'];
-const METODO_COLOR = { Efectivo: '#2f7d4f', Yape: '#742284', Plin: '#1aa3c9', Tarjeta: '#14263f', Transferencia: '#b98a4b' };
+const METODO_COLOR = { Efectivo: '#1baf7a', Tarjeta: '#eb6834', Yape: '#4a3aa7', Transferencia: '#eda100', Plin: '#2a78d6' };
+// Orden para barras y donas: así dos colores parecidos nunca quedan juntos.
+const METODOS_VIZ = ['Efectivo', 'Tarjeta', 'Yape', 'Transferencia', 'Plin'];
 const ESTADOS = { pendiente: ['En laboratorio', 'pend'], listo: ['Listo', 'listo'], entregado: ['Entregado', 'entr'] };
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -77,11 +79,12 @@ const I = {
   up: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
   glasses: '<circle cx="6" cy="15" r="4"/><circle cx="18" cy="15" r="4"/><path d="M14 15a2 2 0 0 0-4 0"/><path d="M2.5 13 5 7c.7-1.3 1.4-2 3-2M21.5 13 19 7c-.7-1.3-1.5-2-3-2"/>',
   apps: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  bars: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9M13 17V5M8 17v-3"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
   chart: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/>',
 };
-const TILE = { inicio: '#2563eb', pacientes: '#7c3aed', ordenes: '#f79009', caja: '#079455', inventario: '#0891b2', recordatorios: '#e11d48', ajustes: '#475467', mas: '#475467' };
+const TILE = { inicio: '#2563eb', pacientes: '#7c3aed', ordenes: '#f79009', caja: '#079455', reportes: '#4f46e5', inventario: '#0891b2', recordatorios: '#e11d48', ajustes: '#475467', mas: '#475467' };
 const tile = (k, i) => `<span class="tile" style="--c:${TILE[k]}">${icon(i)}</span>`;
 const icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${I[n] || ''}</svg>`;
 
@@ -288,7 +291,7 @@ function render() {
 function shell(key, content) {
   const nav = [
     ['inicio', 'Inicio', 'home'], ['pacientes', 'Pacientes', 'users'], ['ordenes', 'Órdenes', 'file'],
-    ['caja', 'Caja diaria', 'cash'], ['inventario', 'Inventario', 'glasses'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear'],
+    ['caja', 'Caja diaria', 'cash'], ['reportes', 'Reportes', 'bars'], ['inventario', 'Inventario', 'glasses'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear'],
   ];
   const recs = recordatoriosData().total;
   const pend = db.ordenes.filter(o => o.estado !== 'entregado').length;
@@ -321,7 +324,7 @@ function bindShell() {
   $('.side .me').onclick = e => { if (innerWidth <= 1180 && !e.target.closest('#logout')) confirmBox(`¿Salir de la cuenta de ${esc(me().nombre)}?`, out, 'Cambiar de usuario'); };
   $('#mas').onclick = e => {
     e.preventDefault();
-    modal({ title: 'Más opciones', body: `<div class="card" style="box-shadow:none">${[['inventario', 'Inventario', 'glasses'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear']]
+    modal({ title: 'Más opciones', body: `<div class="card" style="box-shadow:none">${[['reportes', 'Reportes', 'bars'], ['inventario', 'Inventario', 'glasses'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear']]
       .map(([k, t, i]) => `<a class="list-item link" href="#/${k}" data-close>${tile(k, i)}<span class="grow t">${t}</span></a>`).join('')}
       <a class="list-item link" href="#" id="out3"><span class="tile" style="--c:#98a2b3">${icon('logout')}</span><span class="grow t">Cambiar de usuario</span></a></div>`,
       onMount: bg => { $$('a[data-close]', bg).forEach(a => a.onclick = closeModal); $('#out3', bg).onclick = e => { e.preventDefault(); closeModal(); out(); }; } });
@@ -413,7 +416,7 @@ routes.inicio = {
     const rec = recordatoriosData();
     const h = new Date().getHours();
     const saludo = h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches';
-    return `<div class="page-head"><div><h1>${saludo}, ${esc(me().nombre)}</h1><p>Así va la óptica hoy.</p></div>
+    return `<div class="page-head"><div><h1>${saludo}, ${esc(me().nombre)}</h1><p>Así va la óptica hoy · <a class="lnk" href="#/reportes">Ver reportes</a></p></div>
       <div class="actions"><a class="btn" href="#/pacientes?nuevo=1">${icon('users')} Nuevo paciente</a><a class="btn primary" href="#/nueva-orden">${icon('plus')} Nueva venta</a></div></div>
       <div class="grid g4">
         <div class="card kpi"><div class="l"><i>${icon('trend')}</i>Vendido hoy</div><div class="v num">${money(ventasHoy.reduce((s, o) => s + totalOrden(o), 0))}</div><div class="s">${ventasHoy.length} ${ventasHoy.length === 1 ? 'orden' : 'órdenes'}</div></div>
@@ -447,7 +450,7 @@ function ordenRow(o) {
 }
 function metodoResumen(pagos) {
   const tot = pagos.reduce((s, p) => s + num(p.monto), 0);
-  const by = METODOS.map(m => [m, pagos.filter(p => p.metodo === m).reduce((s, p) => s + num(p.monto), 0)]).filter(x => x[1] > 0);
+  const by = METODOS_VIZ.map(m => [m, pagos.filter(p => p.metodo === m).reduce((s, p) => s + num(p.monto), 0)]).filter(x => x[1] > 0);
   if (!tot) return `<div class="empty" style="padding:14px">Aún no hay cobros hoy.</div>`;
   return `<div class="row between" style="margin-bottom:10px"><span class="muted small">Total cobrado</span><b class="num" style="font-family:var(--serif);font-size:22px">${money(tot)}</b></div>
     <div class="method-bar">${by.map(([m, v]) => `<span style="width:${v / tot * 100}%;background:${METODO_COLOR[m]}"></span>`).join('')}</div>
@@ -1832,6 +1835,153 @@ function crearClaveDueno(cb, cambiar) {
 
 // ---------- Inventario ----------
 let invTab = 'monturas';
+// ---------- Reportes ----------
+// Solo muestra números; nadie cambia nada desde aquí.
+const REP_TIPO_COLOR = { Monturas: '#2a78d6', Lunas: '#1baf7a', 'Lentes de sol': '#eb6834', Accesorios: '#4a3aa7', Otros: '#98a2b3' };
+const REP_PER = { semana: 'Semana', mes: 'Mes', anio: 'Año', rango: 'Fechas' };
+const esFecha = v => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+const MESES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Set', 'Oct', 'Nov', 'Dic'];
+const diasEntre = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 864e5);
+
+function repPeriodo(p, ref, hasta) {
+  const d = new Date(ref + 'T12:00:00'), y = d.getFullYear(), m = d.getMonth();
+  if (p === 'rango') {
+    // Hasta 62 días se ve día por día; más largo, mes por mes.
+    const a = ref, b = hasta, n = diasEntre(a, b) + 1, porMes = n > 62, varios = a.slice(0, 4) !== b.slice(0, 4);
+    const buckets = !porMes ? Array.from({ length: n }, (_, i) => { const x = addDays(a, i); return { a: x, b: x, l: n <= 7 ? fdate(x, { weekday: 'short' }).replace('.', '') : String(+x.slice(8)), t: fdate(x, { weekday: 'short', day: 'numeric', month: 'short' }) }; }) : [];
+    for (let k = new Date(+a.slice(0, 4), +a.slice(5, 7) - 1, 1); porMes && ymd(k) <= b; k = new Date(k.getFullYear(), k.getMonth() + 1, 1)) {
+      const ini = ymd(k), fin = ymd(new Date(k.getFullYear(), k.getMonth() + 1, 0));
+      buckets.push({ a: ini < a ? a : ini, b: fin > b ? b : fin, l: MESES[k.getMonth()] + (varios ? ' ' + String(k.getFullYear()).slice(2) : ''), t: fdate(ini, { month: 'long', year: 'numeric' }) });
+    }
+    return { a, b, n, porMes, buckets, prev: addDays(a, -n), prevB: addDays(a, -1), next: addDays(b, 1), nextB: addDays(b, n), antes: `los ${n} días anteriores`,
+      label: a === b ? fdate(a, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : `${fdate(a)} – ${fdate(b)}` };
+  }
+  if (p === 'mes') {
+    const a = ymd(new Date(y, m, 1)), b = ymd(new Date(y, m + 1, 0));
+    return { a, b, prev: ymd(new Date(y, m - 1, 1)), next: ymd(new Date(y, m + 1, 1)), label: fdate(a, { month: 'long', year: 'numeric' }), antes: 'mes pasado',
+      buckets: Array.from({ length: +b.slice(8) }, (_, i) => { const x = addDays(a, i); return { a: x, b: x, l: String(i + 1), t: fdate(x, { weekday: 'short', day: 'numeric', month: 'short' }) }; }) };
+  }
+  if (p === 'anio') {
+    return { a: `${y}-01-01`, b: `${y}-12-31`, prev: `${y - 1}-01-01`, next: `${y + 1}-01-01`, label: String(y), antes: 'año pasado', porMes: true,
+      buckets: MESES.map((l, i) => ({ a: ymd(new Date(y, i, 1)), b: ymd(new Date(y, i + 1, 0)), l, t: fdate(ymd(new Date(y, i, 1)), { month: 'long', year: 'numeric' }) })) };
+  }
+  const a = addDays(ref, -((d.getDay() + 6) % 7)), b = addDays(a, 6);
+  return { a, b, prev: addDays(a, -7), next: addDays(a, 7), antes: 'semana pasada',
+    label: `${fdate(a, { day: 'numeric', month: 'short' })} – ${fdate(b, { day: 'numeric', month: 'short', year: 'numeric' })}`,
+    buckets: ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map((l, i) => { const x = addDays(a, i); return { a: x, b: x, l, t: fdate(x, { weekday: 'long', day: 'numeric', month: 'short' }) }; }) };
+}
+function repDatos(a, b) {
+  const en = f => !!f && f >= a && f <= b;
+  const ords = db.ordenes.filter(o => en(o.fecha)), pagos = db.pagos.filter(p => en(p.fecha));
+  const vendido = round2(ords.reduce((s, o) => s + totalOrden(o), 0));
+  const cobrado = round2(pagos.reduce((s, p) => s + num(p.monto), 0));
+  const gastos = round2(db.gastos.filter(g => en(g.fecha)).reduce((s, g) => s + num(g.monto), 0));
+  return { ords, pagos, vendido, cobrado, gastos, ganancia: round2(cobrado - gastos) };
+}
+function repTipo(it) {
+  if (it.tipo === 'montura') return db.monturas.find(m => m.id === it.ref)?.clase === 'sol' ? 'Lentes de sol' : 'Monturas';
+  if (it.tipo === 'luna') return 'Lunas';
+  if (it.tipo === 'producto') return 'Accesorios';
+  return 'Otros';
+}
+// Dona fina con un espacio entre partes; al centro va el total.
+function dona(partes, titulo) {
+  const tot = partes.reduce((s, x) => s + x.v, 0);
+  if (!tot) return `<div class="empty" style="padding:20px">Sin datos en este periodo.</div>`;
+  const gap = partes.length > 1 ? .8 : 0;
+  let acc = 0;
+  const segs = partes.map(x => {
+    const pct = x.v / tot * 100, len = Math.max(pct - gap, .2);
+    const s = `<circle cx="21" cy="21" r="15.915" fill="none" stroke="${x.c}" stroke-width="4.2" stroke-dasharray="${len} ${100 - len}" stroke-dashoffset="${25 - acc}" stroke-linecap="butt"><title>${esc(x.n)}: ${money(x.v)} (${Math.round(pct)}%)</title></circle>`;
+    acc += pct; return s;
+  }).join('');
+  return `<div class="dona"><svg viewBox="0 0 42 42" role="img" aria-label="${esc(titulo)}">${segs}</svg><div class="dona-c"><span class="muted small">Total</span><b class="num">${money(tot)}</b></div></div>
+    <div class="dleg">${partes.map(x => `<div><i style="background:${x.c}"></i><span class="grow">${esc(x.n)}</span><span class="muted num">${Math.round(x.v / tot * 100)}%</span><b class="num">${money(x.v)}</b></div>`).join('')}</div>`;
+}
+function cambio(cur, ant, antes, bueno = 1) {
+  if (!ant) return `<span class="muted">Sin datos para comparar</span>`;
+  const p = Math.round((cur - ant) / Math.abs(ant) * 100);
+  const cls = p === 0 ? '' : (p > 0) === (bueno > 0) ? 'up' : 'down';
+  return `<span class="delta ${cls}">${p > 0 ? '▲' : p < 0 ? '▼' : ''} ${Math.abs(p)}%</span> vs. ${antes}`;
+}
+function hbar(filas) {
+  const max = Math.max(...filas.map(f => f.v), 0);
+  return filas.map(f => `<div class="hb"><div class="row between"><span class="t">${esc(f.n)}</span><b class="num">${money(f.v)}</b></div>
+    <div class="hb-track"><span style="width:${max ? Math.max(f.v / max * 100, 1.5) : 0}%"></span></div>${f.s ? `<span class="muted small">${f.s}</span>` : ''}</div>`).join('');
+}
+routes.reportes = {
+  html(_, q) {
+    const p = REP_PER[q.get('p')] ? q.get('p') : 'semana';
+    let ref = esFecha(q.get('d')) ? q.get('d') : hoy(), ra = esFecha(q.get('a')) ? q.get('a') : addDays(hoy(), -29), rb = esFecha(q.get('b')) ? q.get('b') : hoy();
+    if (ra > rb) [ra, rb] = [rb, ra];
+    if (p === 'rango') ref = rb;
+    const P = p === 'rango' ? repPeriodo(p, ra, rb) : repPeriodo(p, ref), R = repDatos(P.a, P.b);
+    // El rango de fechas se compara con los mismos días justo antes; si el periodo está en curso, con los mismos días del periodo anterior.
+    let A;
+    if (p === 'rango') A = repDatos(P.prev, P.prevB);
+    else { const Pa = repPeriodo(p, P.prev), hasta = hoy() >= P.a && hoy() <= P.b ? addDays(Pa.a, diasEntre(P.a, hoy())) : Pa.b; A = repDatos(Pa.a, hasta < Pa.b ? hasta : Pa.b); }
+    const url = (pp, d, b) => pp === 'rango' ? `#/reportes?p=rango&a=${d}&b=${b}` : `#/reportes?p=${pp}&d=${d}`;
+    const hoyOAntes = f => f > hoy() ? hoy() : f;
+    const barras = P.buckets.map(k => { const os = R.ords.filter(o => o.fecha >= k.a && o.fecha <= k.b); return { ...k, v: round2(os.reduce((s, o) => s + totalOrden(o), 0)), n: os.length }; });
+    const maxB = Math.max(...barras.map(x => x.v), 0), mejor = barras.reduce((m, x) => x.v > m.v ? x : m, { v: 0 });
+    const metodos = METODOS_VIZ.map(m => ({ n: m, c: METODO_COLOR[m], v: round2(R.pagos.filter(x => x.metodo === m).reduce((s, x) => s + num(x.monto), 0)) })).filter(x => x.v > 0);
+    const porTipo = {};
+    R.ords.forEach(o => o.items.forEach(it => { const t = repTipo(it); porTipo[t] = (porTipo[t] || 0) + num(it.cant) * num(it.precio); }));
+    const tipos = Object.keys(REP_TIPO_COLOR).map(t => ({ n: t, c: REP_TIPO_COLOR[t], v: round2(porTipo[t] || 0) })).filter(x => x.v > 0);
+    const marcas = {};
+    R.ords.forEach(o => o.items.filter(it => it.tipo === 'montura').forEach(it => { const mk = db.monturas.find(m => m.id === it.ref)?.marca || 'Sin marca'; const x = marcas[mk] = marcas[mk] || { n: mk, v: 0, u: 0 }; x.v += num(it.cant) * num(it.precio); x.u += num(it.cant); }));
+    const topMarcas = Object.values(marcas).sort((a, b) => b.v - a.v).slice(0, 5).map(x => ({ ...x, s: `${x.u} ${x.u === 1 ? 'unidad' : 'unidades'}` }));
+    const socios = db.config.socios.map(s => { const os = R.ords.filter(o => o.por === s.id); return { n: s.nombre, v: round2(os.reduce((a, o) => a + totalOrden(o), 0)), s: `${os.length} ${os.length === 1 ? 'venta' : 'ventas'}` }; });
+    const nuevos = db.pacientes.filter(x => { const f = x.creadoF || (x.creado ? ymd(new Date(x.creado)) : ''); return f >= P.a && f <= P.b; }).length;
+    const debe = round2(R.ords.reduce((s, o) => s + Math.max(0, saldoOrden(o)), 0));
+    const etiqueta = (k, i) => barras.length <= 14 || i === 0 || (i + 1) % 5 === 0 || i === barras.length - 1 ? k.l : '';
+    const enCurso = p !== 'rango' && hoy() >= P.a && hoy() <= P.b;
+    return `<div class="page-head"><div><h1>Reportes</h1><p class="cap">${esc(P.label)}</p></div>
+      <div class="actions"><div class="seg">${Object.entries(REP_PER).map(([k, t]) => `<button type="button" data-go="${k === 'rango' ? url(k, P.a, hoyOAntes(P.b)) : url(k, ref)}" class="${k === p ? 'on' : ''}">${t}</button>`).join('')}</div>
+        <a class="btn icon" href="${url(p, P.prev, P.prevB)}" title="Anterior">${icon('back')}</a><a class="btn icon" href="${url(p, P.next, P.nextB)}" title="Siguiente" style="transform:scaleX(-1)">${icon('back')}</a>
+        ${enCurso || p === 'rango' ? '' : `<a class="btn" href="${url(p, hoy())}">Hoy</a>`}</div></div>
+      ${p === 'rango' ? `<div class="card card-b rango"><form id="rgf" class="rg-f"><label class="f">Desde<input class="inp" type="date" name="a" value="${P.a}" required></label>
+        <label class="f">Hasta<input class="inp" type="date" name="b" value="${P.b}" required></label><button class="btn primary">Ver</button></form>
+        <div class="pick">${[['Hoy', 0, 0], ['Ayer', 1, 1], ['Últimos 7 días', 6, 0], ['Últimos 30 días', 29, 0], ['Últimos 90 días', 89, 0]].map(([t, x, y]) => { const a = addDays(hoy(), -x), b = addDays(hoy(), -y); return `<button type="button" data-go="${url('rango', a, b)}" class="${a === P.a && b === P.b ? 'on' : ''}">${t}</button>`; }).join('')}</div></div>` : ''}
+      <div class="grid g4">
+        <div class="card kpi"><div class="l"><i>${icon('trend')}</i>Vendido</div><div class="v num">${money(R.vendido)}</div><div class="s">${cambio(R.vendido, A.vendido, P.antes)}</div></div>
+        <div class="card kpi ink"><div class="l"><i>${icon('wallet')}</i>Cobrado</div><div class="v num">${money(R.cobrado)}</div><div class="s">${cambio(R.cobrado, A.cobrado, P.antes)}</div></div>
+        <div class="card kpi warn"><div class="l"><i>${icon('down')}</i>Gastos</div><div class="v num">${money(R.gastos)}</div><div class="s">${cambio(R.gastos, A.gastos, P.antes, -1)}</div></div>
+        <div class="card kpi gold"><div class="l"><i>${icon('chart')}</i>Ganancia</div><div class="v num">${money(R.ganancia)}</div><div class="s">${cambio(R.ganancia, A.ganancia, P.antes)}</div></div>
+      </div>
+      ${enCurso ? `<p class="hint" style="margin:8px 2px 0">Comparado con los mismos días ${p === 'semana' ? 'de la semana pasada' : p === 'mes' ? 'del mes pasado' : 'del año pasado'}.</p>` : ''}
+      ${p === 'rango' ? `<p class="hint" style="margin:8px 2px 0">Comparado con ${P.n === 1 ? 'el día anterior' : `los ${P.n} días anteriores`} (${P.n === 1 ? fdate(P.prev) : `${fdate(P.prev)} – ${fdate(P.prevB)}`}).</p>` : ''}
+      <div class="card mt"><div class="card-h"><h3>Ventas ${P.porMes ? 'por mes' : 'por día'}</h3></div>
+        <div class="card-b">${maxB ? `<p class="bcap" id="bcap">Mejor ${P.porMes ? 'mes' : 'día'}: ${esc(mejor.t)} · ${money(mejor.v)}</p><div class="bars" style="--n:${barras.length}">${barras.map((k, i) => `<button type="button" class="bcol${k.a <= hoy() && k.b >= hoy() ? ' hoy' : ''}" data-t="${esc(k.t)}: ${money(k.v)} · ${k.n} ${k.n === 1 ? 'venta' : 'ventas'}" aria-label="${esc(k.t)}: ${money(k.v)}"><span class="bar" style="height:${k.v ? Math.max(k.v / maxB * 100, 2) : 0}%"></span></button>`).join('')}</div>
+          <div class="blab" style="--n:${barras.length}">${barras.map((k, i) => `<span>${etiqueta(k, i)}</span>`).join('')}</div>
+          <p class="hint" style="margin:10px 0 0">Toca una barra para ver el monto.</p>` : `<div class="empty">No hubo ventas en este periodo.</div>`}</div></div>
+      <div class="grid g2 mt">
+        <div class="card"><div class="card-h"><h3>¿Cómo te pagan?</h3><span class="sub">Cobros por método</span></div><div class="card-b">${dona(metodos, 'Cobros por método de pago')}</div></div>
+        <div class="card"><div class="card-h"><h3>¿Qué se vende más?</h3><span class="sub">Ventas por tipo</span></div><div class="card-b">${dona(tipos, 'Ventas por tipo de producto')}</div></div>
+      </div>
+      <div class="grid g3 mt">
+        <div class="card"><div class="card-h"><h3>Marcas más vendidas</h3></div><div class="card-b">${topMarcas.length ? hbar(topMarcas) : `<div class="empty" style="padding:14px">Sin monturas vendidas.</div>`}</div></div>
+        <div class="card"><div class="card-h"><h3>Ventas por socio</h3></div><div class="card-b">${hbar(socios)}</div></div>
+        <div class="card"><div class="card-h"><h3>Datos rápidos</h3></div><div class="card-b"><div class="cash-sum">
+          <div class="line"><span class="muted">Ventas</span><b class="num">${R.ords.length}</b></div>
+          <div class="line"><span class="muted">Venta promedio</span><b class="num">${money(R.ords.length ? R.vendido / R.ords.length : 0)}</b></div>
+          <div class="line"><span class="muted">Pacientes nuevos</span><b class="num">${nuevos}</b></div>
+          <div class="line"><span class="muted">Por cobrar de estas ventas</span><b class="num" style="${debe > 0.009 ? 'color:var(--danger)' : ''}">${money(debe)}</b></div></div></div></div>
+      </div>`;
+  },
+  bind() {
+    $$('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
+    const rf = $('#rgf');
+    rf && (rf.onsubmit = e => { e.preventDefault(); const f = readForm(rf); if (!esFecha(f.a) || !esFecha(f.b)) return toast('Elige las dos fechas'); go(`#/reportes?p=rango&a=${f.a}&b=${f.b}`); });
+    const cap = $('#bcap'), base = cap?.textContent;
+    $$('.bcol').forEach(b => {
+      const ver = () => { $$('.bcol').forEach(x => x.classList.toggle('sel', x === b)); cap.textContent = b.dataset.t; };
+      b.onclick = ver; b.onmouseenter = ver;
+    });
+    const bars = $('.bars'); bars && (bars.onmouseleave = () => { $$('.bcol').forEach(x => x.classList.remove('sel')); cap.textContent = base; });
+  },
+};
+
 routes.inventario = {
   html() {
     const bajo = db.monturas.filter(m => num(m.stock) <= 1).length;
@@ -2310,7 +2460,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.23.10';
+const APP_VERSION = '2026.09.23.11';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
