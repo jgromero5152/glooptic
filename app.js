@@ -173,8 +173,38 @@ async function logoInicial() {
     Object.assign(F, { logo: url, logoRatio: im.width / im.height, logoAuto: true }); save();
   } catch (e) { }
 }
+let avisoNoGuardo = false;
 function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('No se pudo guardar: ' + e.message); }
+  try { localStorage.setItem(KEY, JSON.stringify(db)); avisoNoGuardo = false; }
+  catch (e) {
+    // Aviso grande una vez: si no se guarda, hay que sacar un respaldo antes de cerrar la app.
+    if (!avisoNoGuardo) { avisoNoGuardo = true; alert('Atención: no se pudo guardar el último cambio en este equipo.\n\nNo cierres la app. Toca "Enviar copia" en Inicio (o Ajustes → Descargar respaldo) y avísanos.\n\nDetalle: ' + e.message); }
+    else toast('No se pudo guardar: ' + e.message);
+  }
+}
+// Respaldo: el archivo va como .txt para que el celular deje enviarlo por WhatsApp (no acepta .json); adentro es el mismo JSON.
+const nombreRespaldo = ext => `respaldo-${(db.config.nombre || 'optica').toLowerCase().replace(/\s+/g, '-')}-${hoy()}.${ext}`;
+const respaldoHecho = () => { db.config.ultimoRespaldo = Date.now(); save(); render(); };
+async function descargarRespaldo() { if (await saveFile(nombreRespaldo('json'), JSON.stringify(db))) respaldoHecho(); }
+const puedeEnviarRespaldo = (() => { try { return !!(navigator.canShare && navigator.canShare({ files: [new File(['{}'], 'r.txt', { type: 'text/plain' })] })); } catch (e) { return false; } })();
+async function enviarRespaldo() {
+  const file = new File([JSON.stringify(db)], nombreRespaldo('txt'), { type: 'text/plain' });
+  if (puedeEnviarRespaldo && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); respaldoHecho(); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  descargarRespaldo();
+}
+// Recordatorio en Inicio para el dueño: los datos viven solo en este equipo hasta que exista la nube.
+function avisoRespaldo() {
+  if (user !== dueno()?.id) return '';
+  const nM = db.monturas.length, nP = db.pacientes.length, nO = db.ordenes.length;
+  if (!nM && !nP && !nO) return '';
+  const u = db.config.ultimoRespaldo, dias = u ? Math.floor((Date.now() - u) / 864e5) : null;
+  if (u && dias < 1) return '';
+  const partes = [nM && `${nM} ${nM === 1 ? 'montura' : 'monturas'}`, nP && `${nP} ${nP === 1 ? 'paciente' : 'pacientes'}`, nO && `${nO} ${nO === 1 ? 'venta' : 'ventas'}`].filter(Boolean);
+  const lista = partes.length > 1 ? partes.slice(0, -1).join(', ') + ' y ' + partes[partes.length - 1] : partes[0];
+  return `<div class="lock-note resp-note">${icon('down')}<div class="grow"><b>Guarda una copia de tus datos</b><br>${u ? `Tu último respaldo fue hace ${dias} ${dias === 1 ? 'día' : 'días'}.` : 'Todavía no has guardado ningún respaldo.'} Lo que registraste (${lista}) está guardado solo en este equipo. Envíate la copia por WhatsApp o guárdala en Drive.</div>
+    <div class="actions">${puedeEnviarRespaldo ? `<button class="btn sm primary" id="resp-env">Enviar copia</button>` : ''}<button class="btn sm${puedeEnviarRespaldo ? '' : ' primary'}" id="resp-desc">Descargar</button></div></div>`;
 }
 const socio = id => db.config.socios.find(s => s.id === id);
 const socioName = id => socio(id)?.nombre || '—';
@@ -418,6 +448,7 @@ routes.inicio = {
     const saludo = h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches';
     return `<div class="page-head"><div><h1>${saludo}, ${esc(me().nombre)}</h1><p>Así va la óptica hoy · <a class="lnk" href="#/reportes">Ver reportes</a></p></div>
       <div class="actions"><a class="btn" href="#/pacientes?nuevo=1">${icon('users')} Nuevo paciente</a><a class="btn primary" href="#/nueva-orden">${icon('plus')} Nueva venta</a></div></div>
+      ${avisoRespaldo()}
       <div class="grid g4">
         <div class="card kpi"><div class="l"><i>${icon('trend')}</i>Vendido hoy</div><div class="v num">${money(ventasHoy.reduce((s, o) => s + totalOrden(o), 0))}</div><div class="s">${ventasHoy.length} ${ventasHoy.length === 1 ? 'orden' : 'órdenes'}</div></div>
         <div class="card kpi ink"><div class="l"><i>${icon('wallet')}</i>Cobrado hoy</div><div class="v num">${money(cobrado)}</div><div class="s">Gastos: ${money(gastos)}</div></div>
@@ -437,6 +468,10 @@ routes.inicio = {
               <div class="line"><span>Clientes con saldo</span><b>${rec.deudas.length}</b></div></div></div></div>
         </div>
       </div>`;
+  },
+  bind() {
+    $('#resp-env') && ($('#resp-env').onclick = enviarRespaldo);
+    $('#resp-desc') && ($('#resp-desc').onclick = descargarRespaldo);
   },
 };
 function ordenRow(o) {
@@ -2308,7 +2343,7 @@ routes.ajustes = {
           <button class="btn" id="cdcambiar">${icon('lock')} Cambiar clave de dueño</button></div></div>
         <div class="card"><div class="card-h"><h3>Respaldo de datos</h3></div><div class="card-b">
           <p class="muted small" style="margin-top:0">Los datos se guardan en este equipo. Descarga un respaldo cada semana (o guárdalo en Google Drive) para no perder nada.</p>
-          <div class="actions"><button class="btn primary" id="exp">${icon('down')} Descargar respaldo</button><label class="btn">${icon('up')} Restaurar respaldo<input type="file" id="imp" accept=".json,application/json" hidden></label></div>
+          <div class="actions"><button class="btn primary" id="exp">${icon('down')} Descargar respaldo</button><label class="btn">${icon('up')} Restaurar respaldo<input type="file" id="imp" accept=".json,.txt,application/json,text/plain" hidden></label></div>
           ${c.ultimoRespaldo ? `<p class="hint">Último respaldo: ${new Date(c.ultimoRespaldo).toLocaleString('es-PE')}</p>` : ''}
           <div style="border-top:1px solid var(--line-2);margin-top:16px;padding-top:14px"><b class="small">¿Terminaste de probar?</b><p class="muted small" style="margin:4px 0 10px">Borra los datos de ejemplo y empieza con tus pacientes reales. Pide la clave de ambos socios.</p>
           <button class="btn danger" id="reset">${icon('trash')} Empezar de cero</button></div></div></div>
@@ -2368,10 +2403,7 @@ routes.ajustes = {
         igvPct: F.ruc && F.igv ? num(F.igvPct) : 0, pagado: pagadoOrden(o), saldo: Math.max(0, saldoOrden(o)), metodos: [...new Set(pagosDe(o.id).map(x => x.metodo))], medidaId: o.medidaId, entrega: o.entrega, por: user, estado: 'prueba' };
       try { saveFile(`Prueba ${TIPOS_CP[c.tipo]}.pdf`, await comprobantePDF(c)); } catch (err) { toast('No se pudo generar el PDF: ' + err.message); }
     };
-    $('#exp').onclick = async () => {
-      const ok = await saveFile(`respaldo-${(db.config.nombre || 'optica').toLowerCase().replace(/\s+/g, '-')}-${hoy()}.json`, JSON.stringify(db));
-      if (ok) { db.config.ultimoRespaldo = Date.now(); save(); render(); }
-    };
+    $('#exp').onclick = descargarRespaldo;
     $('#reset').onclick = () => dual('Borrar pacientes, órdenes, caja e inventario (se conservan los socios, los datos de la óptica y las listas de precios)', () => {
       const cfg = { ...db.config, nextOrden: 1, nextMontura: 1, fact: { ...db.config.fact, numB: 1, numF: 1 } }, tar = db.tarifas, prod = db.productos; db = blank(); db.config = cfg; db.tarifas = tar; db.productos = prod; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
     });
@@ -2460,7 +2492,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.23.11';
+const APP_VERSION = '2026.09.24.1';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
@@ -2473,6 +2505,8 @@ setInterval(buscarActualizacion, 15 * 60 * 1000);
 
 render();
 logoInicial();
+// Pide al navegador que no borre estos datos por su cuenta cuando falte espacio.
+try { navigator.storage && navigator.storage.persist && navigator.storage.persist().catch(() => { }); } catch (e) { }
 
 // Instalable en el teléfono/tablet y funciona sin internet (solo cuando se sirve por https o localhost).
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost') && !EN_CLAUDE) {
