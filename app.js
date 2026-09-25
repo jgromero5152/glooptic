@@ -1546,10 +1546,10 @@ routes['nueva-orden'] = {
           </div></div>
           <div class="card vstep" data-paso="2"><div class="card-h"><h3>Montura, lunas y accesorios</h3>${p ? `<span class="muted small">${esc(p.nombre)}</span>` : ''}</div><div class="card-b">
             <div class="fg"><div class="fld">Montura<div class="search" style="max-width:none">${icon('search')}<input id="mcode" placeholder="N° de varilla, marca o sigla…" autocomplete="off"><div class="sr" id="mres" hidden></div></div></div>
-            <div class="fld">Buscar luna<div class="search" style="max-width:none">${icon('search')}<input id="lq" placeholder="Ej. monofocal blue, inicial free AR, fotomatic…" autocomplete="off"><div class="sr" id="lres" hidden></div></div></div>
-            <label class="f">Lunas<select class="inp" id="csel"><option value="">Elegir tipo de luna…</option>${gruposTarifa().map(([g, ts]) => `<optgroup label="${esc(g)}">${ts.map(t => `<option value="t:${t.id}">${esc(t.nombre)}</option>`).join('')}</optgroup>`).join('')}
-              ${db.cristales.length ? `<optgroup label="Otros cristales (precio fijo)">${db.cristales.map(c => `<option value="c:${c.id}">${esc(c.nombre)} — ${money(c.precio)}</option>`).join('')}</optgroup>` : ''}</select>
-              ${!db.tarifas.length && !db.cristales.length ? `<span class="hint">Aún no tienes precios de lunas. Créalos en <a class="lnk" href="#/inventario" id="irlunas">Inventario → Precios de lunas</a> o agrégalas con “Otro producto”.</span>` : ''}</label>
+            <div class="fld">Lunas<div class="search" style="max-width:none">${icon('search')}<input id="lq" placeholder="Toca para ver todas o escribe: monofocal blue…" autocomplete="off"><div class="sr" id="lres" hidden></div></div>
+              ${!db.tarifas.length && !db.cristales.length ? `<span class="hint">Aún no tienes precios de lunas. Créalos en <a class="lnk" href="#/inventario" id="irlunas">Inventario → Precios de lunas</a> o agrégalas con “Otro producto”.</span>` : ''}</div>
+            <label class="f" style="display:none">Lunas<select class="inp" id="csel"><option value="">Elegir tipo de luna…</option>${gruposTarifa().map(([g, ts]) => `<optgroup label="${esc(g)}">${ts.map(t => `<option value="t:${t.id}">${esc(t.nombre)}</option>`).join('')}</optgroup>`).join('')}
+              ${db.cristales.length ? `<optgroup label="Otros cristales (precio fijo)">${db.cristales.map(c => `<option value="c:${c.id}">${esc(c.nombre)} — ${money(c.precio)}</option>`).join('')}</optgroup>` : ''}</select></label>
             <div class="fld">Accesorios y otros<div class="search" style="max-width:none">${icon('search')}<input id="pq" placeholder="Ej. tornillo, plaquetas, estuche…" autocomplete="off"><div class="sr" id="prodres" hidden></div></div></div></div>
             <div id="lpanel"></div>
             <div class="tbl-wrap mt"><table class="items"><thead><tr><th>Descripción</th><th class="c" style="width:70px">Cant.</th><th class="r" style="width:120px">Precio</th><th class="r" style="width:110px">Subtotal</th><th style="width:40px"></th></tr></thead><tbody id="itbody"></tbody></table></div>
@@ -1712,22 +1712,34 @@ routes['nueva-orden'] = {
     // Buscar luna escribiendo: "monofocal blue", "inicial free ar"… Muestra lista + tratamiento y abre sus precios.
     const lq = $('#lq'), lres = $('#lres');
     const pintarLunas = () => {
-      const toks = sinTilde(lq.value.trim()).split(/\s+/).filter(Boolean);
-      if (!toks.length) { lres.hidden = true; return; }
+      const q = lq.value.trim(), toks = sinTilde(q).split(/\s+/).filter(Boolean);
       const med = medidaSel(), hits = [];
-      db.tarifas.forEach(t => t.cols.forEach((c, j) => {
-        const txt = sinTilde(`${t.grupo} ${t.nombre} ${c}`);
-        if (!toks.every(k => txt.includes(k))) return;
-        const auto = filaParaMedida(t, med), precios = t.filas.map((_, i) => precioTarifa(t, i, j)).filter(Boolean);
-        if (precios.length) hits.push({ t, j, auto, precio: auto >= 0 ? precioTarifa(t, auto, j) : Math.min(...precios) });
-      }));
-      lres.innerHTML = hits.slice(0, 30).map((h, k) => `<a href="#" data-k="${k}"><span class="grow"><b>${esc(h.t.nombre)}</b> · ${esc(h.t.cols[h.j])}<br><span class="muted small">${esc(h.t.grupo)}${h.auto >= 0 ? ' · rango ' + esc(h.t.filas[h.auto].rango) + ' (su medida)' : ''}</span></span><b class="num">${h.auto >= 0 ? '' : 'desde '}${money(h.precio)}</b></a>`).join('') || `<div class="empty small">No hay lunas con “${esc(lq.value.trim())}”</div>`;
+      if (!toks.length) {
+        // Sin escribir: todas las listas agrupadas (y los cristales de precio fijo) para elegir mirando.
+        gruposTarifa().forEach(([g, ts]) => ts.forEach(t => hits.push({ t, j: -1, g })));
+        db.cristales.forEach(c => hits.push({ c, g: 'Otros cristales (precio fijo)' }));
+      } else {
+        db.tarifas.forEach(t => t.cols.forEach((c, j) => {
+          const txt = sinTilde(`${t.grupo} ${t.nombre} ${c}`);
+          if (!toks.every(k => txt.includes(k))) return;
+          const auto = filaParaMedida(t, med), precios = t.filas.map((_, i) => precioTarifa(t, i, j)).filter(Boolean);
+          if (precios.length) hits.push({ t, j, auto, precio: auto >= 0 ? precioTarifa(t, auto, j) : Math.min(...precios) });
+        }));
+        db.cristales.filter(c => toks.every(k => sinTilde(c.nombre).includes(k))).forEach(c => hits.push({ c }));
+      }
+      let g0 = null;
+      lres.innerHTML = hits.slice(0, toks.length ? 30 : 400).map((h, k) => (h.g && h.g !== g0 ? `<div class="grp">${esc(g0 = h.g)}</div>` : '') + (h.c
+        ? `<a href="#" data-k="${k}"><span class="grow"><b>Cristales ${esc(h.c.nombre)}</b></span><b class="num">${money(h.c.precio)}</b></a>`
+        : h.j < 0 ? `<a href="#" data-k="${k}"><span class="grow"><b>${esc(h.t.nombre)}</b><br><span class="muted small">${esc(h.t.cols.join(' · '))}</span></span></a>`
+        : `<a href="#" data-k="${k}"><span class="grow"><b>${esc(h.t.nombre)}</b> · ${esc(h.t.cols[h.j])}<br><span class="muted small">${esc(h.t.grupo)}${h.auto >= 0 ? ' · rango ' + esc(h.t.filas[h.auto].rango) + ' (su medida)' : ''}</span></span><b class="num">${h.auto >= 0 ? '' : 'desde '}${money(h.precio)}</b></a>`)).join('')
+        || `<div class="empty small">${toks.length ? `No hay lunas con “${esc(q)}”` : 'Aún no tienes precios de lunas.'}</div>`;
       lres.hidden = false;
       $$('[data-k]', lres).forEach(a => a.onmousedown = e => {
         e.preventDefault(); const h = hits[+a.dataset.k];
-        lq.value = ''; lres.hidden = true;
+        lq.value = ''; lres.hidden = true; lq.blur();
+        if (h.c) { $('#csel').value = 'c:' + h.c.id; $('#csel').onchange(); toast('Agregado: Cristales ' + h.c.nombre); return; }
         $('#csel').value = 't:' + h.t.id; tSel = h.t; fSel = null; colBuscada = h.j; panel();
-        setTimeout(() => ($('.lmat .hl') || $('#lpanel'))?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+        setTimeout(() => ($('.lmat .hl') || $('#lpanel'))?.scrollIntoView({ behavior: 'smooth', block: h.j < 0 ? 'start' : 'center' }), 50);
       });
     };
     lq.oninput = pintarLunas; lq.onfocus = pintarLunas;
@@ -3586,7 +3598,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.24.6';
+const APP_VERSION = '2026.09.24.7';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
