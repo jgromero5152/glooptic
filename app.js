@@ -2052,7 +2052,9 @@ function emitirForm(o, tipo) {
 
 function comprobanteView(c) {
   const o = orden(c.ordenId), p = o && paciente(o.pacienteId);
-  const name = `${TIPOS_CP[c.tipo]} ${cpNum(c)}.pdf`;
+  // El nombre del paciente en el archivo, para encontrarlo fácil al compartirlo.
+  const quien = String((p && p.nombre) || (c.cliente && c.cliente.nombre) || '').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const name = `${TIPOS_CP[c.tipo]} ${cpNum(c)}${quien ? ' - ' + quien : ''}.pdf`;
   const waTxt = p ? `Hola ${p.nombre.split(' ')[0]}, te saludamos de *${db.config.nombre}*. Te enviamos tu ${TIPOS_CP[c.tipo].toLowerCase()} *${cpNum(c)}* por ${money(c.total)}. ¡Gracias por tu compra!` : '';
   modal({
     title: `${TIPOS_CP[c.tipo]} ${cpNum(c)}`,
@@ -3641,7 +3643,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.25.1';
+const APP_VERSION = '2026.09.25.2';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
