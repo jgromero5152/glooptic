@@ -1305,7 +1305,15 @@ function medidaCard(m, p, latest) {
 function medidaForm(p, m) {
   const e = m || { fecha: hoy(), od: {}, oi: {} };
   const prev = !m && ultimaMedida(p.id);
-  const eyeRow = eye => `<tr><td>${eye.toUpperCase()}</td>${['esf', 'cil', 'eje', 'add'].map(k => `<td><input class="inp" name="${eye}_${k}" inputmode="decimal" value="${esc(e[eye][k])}" placeholder="${k === 'eje' ? '0–180' : '0.00'}"></td>`).join('')}<td><input class="inp" name="${eye}_av" value="${esc(e[eye].av)}" placeholder="20/20"></td></tr>`;
+  // Esfera: se elige + o −. Cilindro: siempre negativo. Adición: sin signo.
+  const sg = v => String(v ?? '').trim() === '' || num(v) === 0 ? '' : num(v) < 0 ? '-' : '+';
+  const absv = v => String(v ?? '').trim() === '' ? '' : String(Math.abs(num(v)));
+  const eyeRow = eye => `<tr><td>${eye.toUpperCase()}</td>
+    <td><div class="sgn"><button type="button" class="sgb" data-sg="${eye}" data-v="${sg(e[eye].esf)}">${{ '-': '−', '+': '+' }[sg(e[eye].esf)] || '±'}</button><input class="inp" name="${eye}_esf" inputmode="decimal" value="${esc(absv(e[eye].esf))}" placeholder="0.00"></div></td>
+    <td><div class="sgn"><span class="sgf">−</span><input class="inp" name="${eye}_cil" inputmode="decimal" value="${esc(absv(e[eye].cil))}" placeholder="0.00"></div></td>
+    <td><input class="inp" name="${eye}_eje" inputmode="decimal" value="${esc(e[eye].eje)}" placeholder="0–180"></td>
+    <td><input class="inp" name="${eye}_add" inputmode="decimal" value="${esc(absv(e[eye].add))}" placeholder="0.00"></td>
+    <td><input class="inp" name="${eye}_av" value="${esc(e[eye].av)}" placeholder="20/20"></td></tr>`;
   modal({
     title: m ? 'Corregir medida' : 'Nueva medida', wide: true,
     body: `<form id="mform" class="form">
@@ -1319,14 +1327,23 @@ function medidaForm(p, m) {
       <label class="f full">Observaciones<textarea class="inp" name="obs">${esc(e.obs)}</textarea></label></div></form>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="mform">Guardar medida</button>`,
     onMount: bg => {
+      const ponSg = (b, v) => { b.dataset.v = v; b.textContent = { '-': '−', '+': '+' }[v] || '±'; b.classList.remove('falta'); };
+      $$('[data-sg]', bg).forEach(b => b.onclick = () => ponSg(b, b.dataset.v === '-' ? '+' : '-'));
+      // Si escriben el signo a mano, pasa al botón.
+      ['od', 'oi'].forEach(eye => ['esf', 'cil', 'add'].forEach(k => { const i = $(`[name=${eye}_${k}]`, bg); i.oninput = () => { const m = i.value.match(/^\s*([+-])/); if (!m) return; i.value = i.value.replace(/^\s*[+-]\s*/, ''); if (k === 'esf') ponSg($(`[data-sg=${eye}]`, bg), m[1]); }; }));
       $('#copyprev', bg) && ($('#copyprev', bg).onclick = () => {
-        ['od', 'oi'].forEach(eye => ['esf', 'cil', 'eje', 'add', 'av'].forEach(k => { $(`[name=${eye}_${k}]`, bg).value = prev[eye][k] ?? ''; }));
+        ['od', 'oi'].forEach(eye => ['esf', 'cil', 'eje', 'add', 'av'].forEach(k => { $(`[name=${eye}_${k}]`, bg).value = ['esf', 'cil', 'add'].includes(k) ? absv(prev[eye][k]) : prev[eye][k] ?? ''; }));
+        ['od', 'oi'].forEach(eye => ponSg($(`[data-sg=${eye}]`, bg), sg(prev[eye].esf)));
         $('[name=dip]', bg).value = prev.dip || '';
       });
       $('#mform', bg).onsubmit = ev => {
         ev.preventDefault();
         const f = readForm(ev.target);
-        const eye = k => ({ esf: f[k + '_esf'], cil: f[k + '_cil'], eje: f[k + '_eje'], add: f[k + '_add'], av: f[k + '_av'] });
+        const vacio = v => String(v ?? '').trim() === '', abs = v => vacio(v) ? '' : n2r(Math.abs(num(String(v).replace(',', '.'))));
+        const falta = ['od', 'oi'].filter(k => !vacio(f[k + '_esf']) && num(String(f[k + '_esf']).replace(',', '.')) !== 0 && !$(`[data-sg=${k}]`, bg).dataset.v);
+        if (falta.length) { falta.forEach(k => $(`[data-sg=${k}]`, bg).classList.add('falta')); toast('Elige + o − en la esfera de ' + falta.map(k => k.toUpperCase()).join(' y ')); return; }
+        const esf = k => { const a = abs(f[k + '_esf']); return a === '' || num(a) === 0 ? a : ($(`[data-sg=${k}]`, bg).dataset.v === '-' ? '-' : '+') + a; };
+        const eye = k => ({ esf: esf(k), cil: vacio(f[k + '_cil']) || num(abs(f[k + '_cil'])) === 0 ? abs(f[k + '_cil']) : '-' + abs(f[k + '_cil']), eje: f[k + '_eje'], add: abs(f[k + '_add']), av: f[k + '_av'] });
         const data = { fecha: f.fecha, dip: f.dip, altura: f.altura, lente: f.lente, filtros: f.filtros, obs: f.obs, od: eye('od'), oi: eye('oi') };
         if (m) Object.assign(m, data);
         else {
@@ -1654,8 +1671,8 @@ routes['nueva-orden'] = {
             : `Según la medida (esf ±${n2r(pot.esf)}, cil −${n2r(pot.cil)}) le corresponde el <b>rango ${esc(t.filas[auto].rango)}</b> (marcado). Toca el precio del tratamiento.`;
       // Tabla completa: rangos en filas y tratamientos (UV, AR, Blue…) en columnas; se toca el precio para agregarlo.
       const tabla = `<div class="tbl-wrap lmat-w"><table class="lmat"><thead><tr><th>Rango</th>${t.cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
-        ${t.filas.map((f, i) => `<tr class="${i === auto ? 'auto' : ''} ${i === fila ? 'sel' : ''}"><td class="lr"><b>${esc(f.rango)}</b>${i === auto ? ' <span class="chip entr">Su medida</span>' : ''}${conRango(f) ? `<div class="muted small">esf ±${n2r(f.esf)} · cil −${n2r(f.cil)}</div>` : ''}</td>
-          ${t.cols.map((_, j) => { const pr = precioTarifa(t, i, j); return pr ? `<td><button type="button" data-f="${i}" data-j="${j}" class="${j === colBuscada ? 'hl' : ''}"><small>${esc(t.cols[j])}</small>${money(pr)}</button></td>` : '<td class="nop"><span class="muted">—</span></td>'; }).join('')}</tr>`).join('')}</tbody></table></div>`;
+        ${t.filas.map((f, i) => `<tr class="${i === auto ? 'auto' : ''} ${i === fila ? 'sel' : ''}"><td class="lr"><b>${esc(f.rango)}</b>${i === auto ? ' <span class="chip entr">Su medida</span>' : noAlcanza(t, i, pot) ? ' <span class="chip">No alcanza</span>' : ''}${conRango(f) ? `<div class="muted small">esf ±${n2r(f.esf)} · cil −${n2r(f.cil)}</div>` : ''}</td>
+          ${t.cols.map((_, j) => { const pr = precioTarifa(t, i, j), corto = noAlcanza(t, i, pot); return pr ? `<td><button type="button" data-f="${i}" data-j="${j}" class="${j === colBuscada ? 'hl' : ''}" ${corto ? 'disabled title="Este rango no alcanza para la medida del paciente"' : ''}><small>${esc(t.cols[j])}</small>${money(pr)}</button></td>` : '<td class="nop"><span class="muted">—</span></td>'; }).join('')}</tr>`).join('')}</tbody></table></div>`;
       box.innerHTML = `<div class="lpanel"><b>${esc(t.nombre)}</b>
         <div class="small muted">${aviso}</div>
         ${t.cols.some(esBlue) ? segOpc('lrefl', 'Reflejo del Blue:', reflejo, ['azul', 'verde']) : ''}
@@ -1703,7 +1720,7 @@ routes['nueva-orden'] = {
     $('#irlunas') && ($('#irlunas').onclick = () => { invTab = 'cristales'; });
     $('#csel').onchange = () => {
       const [k, id] = $('#csel').value.split(':');
-      if (k === 't') { tSel = tarifa(id); fSel = null; colBuscada = -1; panel(); return; }
+      if (k === 't') { tSel = tarifa(id); fSel = null; colBuscada = -1; panel(); setTimeout(() => $('.lmat tr.auto')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50); return; }
       tSel = null; panel();
       const c = k === 'c' && db.cristales.find(x => x.id === id); if (!c) return;
       draft.items.push({ tipo: 'cristal', ref: c.id, desc: 'Cristales ' + c.nombre, cant: 1, precio: c.precio });
@@ -1739,7 +1756,7 @@ routes['nueva-orden'] = {
         lq.value = ''; lres.hidden = true; lq.blur();
         if (h.c) { $('#csel').value = 'c:' + h.c.id; $('#csel').onchange(); toast('Agregado: Cristales ' + h.c.nombre); return; }
         $('#csel').value = 't:' + h.t.id; tSel = h.t; fSel = null; colBuscada = h.j; panel();
-        setTimeout(() => ($('.lmat .hl') || $('#lpanel'))?.scrollIntoView({ behavior: 'smooth', block: h.j < 0 ? 'start' : 'center' }), 50);
+        setTimeout(() => ($('.lmat tr.auto .hl') || $('.lmat tr.auto') || $('.lmat .hl') || $('#lpanel'))?.scrollIntoView({ behavior: 'smooth', block: h.j < 0 ? 'start' : 'center' }), 50);
       });
     };
     lq.oninput = pintarLunas; lq.onfocus = pintarLunas;
@@ -2555,6 +2572,8 @@ const conRango = f => f.esf !== '' && f.esf != null;
 const tieneRangos = t => t.filas.some(conRango);
 const precioTarifa = (t, i, j) => i >= 0 && t.filas[i] ? num(t.filas[i].precios[j]) : 0;
 const n2r = v => num(v).toFixed(2).replace(/\.00$/, '');
+// Una fila con rango no sirve si la medida (esfera o cilindro) es mayor que su tope.
+const noAlcanza = (t, i, pot) => !!pot && conRango(t.filas[i]) && (pot.esf > num(t.filas[i].esf) + 1e-9 || pot.cil > num(t.filas[i].cil) + 1e-9);
 const filaTexto = f => conRango(f) ? `Rango ${f.rango} · esf hasta ±${n2r(f.esf)} · cil hasta −${n2r(f.cil)}` : f.rango;
 const descLuna = (t, i, j) => `Lunas ${t.nombre} · ${t.cols[j]} · ${conRango(t.filas[i]) ? 'rango ' + t.filas[i].rango : t.filas[i].rango}`;
 function gruposTarifa() {
@@ -3598,7 +3617,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.24.7';
+const APP_VERSION = '2026.09.24.8';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
