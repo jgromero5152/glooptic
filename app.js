@@ -1597,6 +1597,7 @@ routes['nueva-orden'] = {
             ${recargoHTML()}
             <div class="row between"><span class="muted">Resta</span><b class="num" id="tresta" style="font-size:18px">S/ 0.00</b></div>
             <div id="solo-encargo" class="form"><label class="f">Fecha de entrega<input class="inp" type="date" name="entrega" value="${esc(draft.entrega)}"></label>
+            <div class="fld">Medidas de la montura <span class="hint">opcional · salen en la orden de laboratorio</span><div class="labm">${LAB_CAMPOS.map(([k, t]) => `<label class="f"><span class="small">${t}</span><input class="inp sm" name="lab_${k}" inputmode="decimal" placeholder="mm"></label>`).join('')}</div></div>
             <label class="f">Notas para el laboratorio<textarea class="inp" name="notas" placeholder="Tipo de armado, altura, observaciones…">${esc(draft.notas)}</textarea></label></div>
             <label class="f">Comprobante<select class="inp" name="cptipo">${[['nota', 'Nota de venta'], ['boleta', 'Boleta de venta'], ['factura', 'Factura'], ['', 'Ninguno por ahora']].map(([v, t]) => `<option value="${v}" ${v === (fact().ruc ? 'boleta' : 'nota') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
             <button class="btn primary" style="padding:13px" id="ogo">${icon('check')} Registrar venta</button>
@@ -1820,13 +1821,16 @@ routes['nueva-orden'] = {
       const registrar = monto => {
         const o = { id: uid(), numero: db.config.nextOrden++, pacienteId: draft.pacienteId, medidaId: draft.medidaId, fecha: hoy(), items, descuento: num(f.descuento), entrega: dir ? hoy() : f.entrega, notas: dir ? '' : f.notas, estado: dir ? 'entregado' : 'pendiente', por: user, creado: Date.now() };
         if (dir) Object.assign(o, { entregado: hoy(), directa: true });
+        else { const lab = Object.fromEntries(LAB_CAMPOS.map(([k]) => [k, String(f['lab_' + k] || '').trim()]).filter(x => x[1])); if (Object.keys(lab).length) o.lab = lab; }
         const ab = round2(Math.min(monto, tot)), pct = rtj.pct(), rec = ab > 0 && pct > 0 ? recargoItem(ab, pct) : null;
         if (rec && rec.precio > 0) o.items.push(rec);
         db.ordenes.push(o);
         if (ab > 0) db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto: round2(ab + (rec ? rec.precio : 0)), metodo: f.metodo, por: user, ts: Date.now(), tipo: 'abono' });
         moverStock(items, -1);
         save(); draft = null; toast(dir ? `Venta N° ${pad(o.numero)} cobrada y entregada` : `Orden N° ${pad(o.numero)} registrada`); go('#/orden/' + o.id);
-        if (f.cptipo) emitirForm(o, f.cptipo);
+        // Encargo con lunas: primero la orden para el laboratorio (sin precios), después el comprobante.
+        if (!dir && items.some(i => itemLab(i, db.monturas))) labForm(o, f.cptipo ? () => emitirForm(o, f.cptipo) : null);
+        else if (f.cptipo) emitirForm(o, f.cptipo);
       };
       if (dir) return registrar(tot);
       const ab = numPago(f.abono);
@@ -1858,7 +1862,7 @@ routes.orden = {
     const tot = totalOrden(o), pag = pagadoOrden(o), sal = round2(tot - pag), pagos = pagosDe(o.id), cp = comprobanteDe(o.id);
     return `<a class="crumb" href="#/ordenes">${icon('back')} Pedidos</a>
       <div class="page-head"><div><h1>Pedido N° ${pad(o.numero)}</h1><p>${fdate(o.fecha, { day: 'numeric', month: 'long', year: 'numeric' })} · Atendió ${esc(socioName(o.por))}</p></div>
-        <div class="actions"><button class="btn ${cp ? '' : 'primary'}" id="ocp">${icon('file')} ${cp ? `${TIPOS_CP[cp.tipo]} ${esc(cpNum(cp))}` : 'Boleta / Factura'}</button>${p?.telefono ? `<a class="btn wa" id="owa" target="_blank" rel="noopener" href="${waLink(p.telefono, ordenWaTexto(o, p))}">${icon('wa')} ${o.estado === 'listo' ? 'Avisar que está listo' : 'WhatsApp'}</a>` : ''}
+        <div class="actions">${o.items.some(i => itemLab(i, db.monturas)) ? `<button class="btn" id="olab">${icon('eye')} Orden de laboratorio</button>` : ''}<button class="btn ${cp ? '' : 'primary'}" id="ocp">${icon('file')} ${cp ? `${TIPOS_CP[cp.tipo]} ${esc(cpNum(cp))}` : 'Boleta / Factura'}</button>${p?.telefono ? `<a class="btn wa" id="owa" target="_blank" rel="noopener" href="${waLink(p.telefono, ordenWaTexto(o, p))}">${icon('wa')} ${o.estado === 'listo' ? 'Avisar que está listo' : 'WhatsApp'}</a>` : ''}
         <button class="btn ghost icon" id="odel" title="Anular orden">${icon('trash')}</button></div></div>
       <div class="card card-b" style="margin-bottom:18px"><div class="row between wrap"><div class="row wrap"><span class="muted small strong">ESTADO</span>
         <div class="seg" id="est">${Object.entries(ESTADOS).map(([k, [t]]) => `<button data-e="${k}" class="${o.estado === k ? 'on' : ''}">${t}</button>`).join('')}</div></div>
@@ -1898,6 +1902,7 @@ routes.orden = {
       db.pagos = db.pagos.filter(x => x.ordenId !== o.id); db.ordenes = db.ordenes.filter(x => x !== o); save(); toast('Orden anulada'); go('#/ordenes');
     }, 'anular');
     $('#ocp').onclick = () => { const cp = comprobanteDe(o.id); cp ? comprobanteView(cp) : emitirForm(o); };
+    $('#olab') && ($('#olab').onclick = () => labForm(o));
     $('#owa') && ($('#owa').onclick = () => { if (o.estado === 'listo') { o.avisado = hoy(); save(); } });
   },
 };
@@ -2089,6 +2094,113 @@ function comprobanteView(c) {
       }));
     },
   });
+}
+
+// ---------- Orden de laboratorio: medida, lunas pedidas y montura, sin precios ----------
+const LAB_CAMPOS = [['h', 'Horizontal'], ['v', 'Vertical'], ['puente', 'Puente'], ['diag', 'Diagonal mayor'], ['altura', 'Altura']];
+const nombreArchivo = t => String(t || '').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+function labForm(o, luego) {
+  const p = paciente(o.pacienteId), m = db.medidas.find(x => x.id === o.medidaId), lab = o.lab || {};
+  const val = k => lab[k] ?? (k === 'altura' && m && m.altura ? m.altura : '');
+  const name = `Orden de laboratorio N° ${pad(o.numero)}${p ? ' - ' + nombreArchivo(p.nombre) : ''}.pdf`;
+  modal({
+    title: `Orden de laboratorio · N° ${pad(o.numero)}`, wide: true,
+    body: `<form id="labf" class="form">
+      <p class="muted small" style="margin:0">Para mandar al laboratorio: lleva la medida${m ? '' : ' <b style="color:var(--danger)">(este pedido no tiene medida)</b>'}, las lunas que se piden con sus detalles y la montura. <b>No lleva precios.</b></p>
+      <div class="fld">Medidas de la montura <span class="hint">opcional, en mm</span><div class="labm">${LAB_CAMPOS.map(([k, t]) => `<label class="f"><span class="small">${t}</span><input class="inp sm" name="${k}" inputmode="decimal" value="${esc(val(k))}" placeholder="mm"></label>`).join('')}</div></div>
+      <label class="f">Notas para el laboratorio<textarea class="inp" name="notas" placeholder="Tipo de armado, observaciones…">${esc(o.notas || '')}</textarea></label></form>`,
+    foot: `<button class="btn" id="labdl">${icon('down')} Descargar</button><button class="btn wa" id="labsh">${icon('wa')} Compartir</button>${luego ? `<button class="btn primary" id="labok">Listo · hacer comprobante</button>` : ''}`,
+    onMount: bg => {
+      const guardar = () => {
+        const f = readForm($('#labf', bg));
+        o.lab = Object.fromEntries(LAB_CAMPOS.map(([k]) => [k, String(f[k] || '').trim()]).filter(x => x[1]));
+        if ((o.notas || '') !== f.notas) o.notas = f.notas;
+        save();
+      };
+      const make = async () => { guardar(); try { return await labPDF(o); } catch (e) { toast('No se pudo generar el PDF: ' + e.message); return null; } };
+      $('#labdl', bg).onclick = async () => { const b = await make(); if (b) saveFile(name, b); };
+      $('#labsh', bg).onclick = async () => {
+        const b = await make(); if (!b) return;
+        const file = new File([b], name, { type: 'application/pdf' });
+        if (canShareFiles && navigator.canShare({ files: [file] })) {
+          try { await navigator.share({ files: [file] }); return; } catch (e) { if (e.name === 'AbortError') return; }
+        }
+        await saveFile(name, b);
+        window.open('https://web.whatsapp.com/', '_blank');
+        toast('PDF descargado: adjúntalo en el chat del laboratorio');
+      };
+      $('#labok', bg) && ($('#labok', bg).onclick = () => { guardar(); closeModal(); luego(); });
+    },
+  });
+}
+// Texto de cada cosa que va al laboratorio (sin precios).
+function labLineas(o) {
+  const extras = new Set(extrasLuna().map(x => x.id));
+  const lunas = [], montura = [];
+  o.items.forEach(i => {
+    const d = String(i.desc || '').replace(/^Lunas\s+/i, '').replace(/ · rango [IVX]+(?= · |$)/, ''); // el rango es solo para el precio
+    if (i.tipo === 'luna') lunas.push(`${d}  —  ${i.porLuna ? (num(i.cant) === 1 ? '1 luna' : num(i.cant) === 2 ? 'par (2 lunas)' : num(i.cant) + ' lunas') : num(i.cant) > 1 ? num(i.cant) + ' pares' : 'par'}`);
+    else if (i.tipo === 'cristal' || (i.tipo === 'otro' && itemLab(i, db.monturas))) lunas.push(`${d}${num(i.cant) > 1 ? '  —  ' + num(i.cant) : ''}`);
+    else if (i.tipo === 'producto' && extras.has(i.ref)) lunas.push(d);
+    else if (i.tipo === 'montura') montura.push(d);
+  });
+  return { lunas, montura };
+}
+async function labPDF(o) {
+  const { jsPDF } = await loadJsPDF();
+  const doc = new jsPDF({ compress: true, unit: 'mm', format: 'a4' });
+  const M = 14, W = 210, R = W - M, p = paciente(o.pacienteId), m = db.medidas.find(x => x.id === o.medidaId), lab = o.lab || {};
+  let y = 18;
+  pdfText(doc, 'ORDEN DE LABORATORIO', M, y, { b: true, s: 17 });
+  pdfText(doc, db.config.nombre || '', R, y, { b: true, s: 12, a: 'right', c: PDF_TEAL });
+  y += 6;
+  pdfText(doc, `N° ${pad(o.numero)}   ·   Fecha: ${fdate(o.fecha)}${o.entrega && !o.directa ? '   ·   Entrega: ' + fdate(o.entrega) : ''}`, M, y, { s: 10, c: PDF_GRAY });
+  if (db.config.telefono) pdfText(doc, 'Tel. ' + db.config.telefono, R, y, { s: 9, a: 'right', c: PDF_GRAY });
+  y += 5; doc.setDrawColor(...PDF_LINE); doc.setLineWidth(0.4); doc.line(M, y, R, y);
+  const titulo = t => { y += 9; pdfText(doc, t, M, y, { b: true, s: 11, c: PDF_TEAL }); y += 2; };
+  titulo('Paciente');
+  y += 5; pdfText(doc, p ? p.nombre : '—', M, y, { b: true, s: 12 });
+  if (p && p.dni) pdfText(doc, 'DNI ' + p.dni, R, y, { s: 10, a: 'right', c: PDF_GRAY });
+  // Medida
+  titulo(m ? `Medida (examen del ${fdate(m.fecha)})` : 'Medida (no registrada: completar a mano)');
+  const cols = [['', 18], ['Esfera', 30], ['Cilindro', 30], ['Eje', 24], ['Adición', 30]];
+  y += 2; doc.setFillColor(...PDF_NAVY); doc.rect(M, y, cols.reduce((s, c) => s + c[1], 0), 7, 'F');
+  let x = M; cols.forEach(([t, w]) => { pdfText(doc, t, x + w / 2, y + 4.8, { b: true, s: 9, c: [255, 255, 255], a: 'center' }); x += w; });
+  y += 7;
+  ['od', 'oi'].forEach(e => {
+    const r = m ? m[e] || {} : {}, v = [e.toUpperCase(), m ? rx2(r.esf) : '', m ? rx2(r.cil) : '', m ? rx2(r.eje, 0) : '', m ? rx2(r.add) : ''];
+    x = M; cols.forEach(([, w], k) => { doc.setDrawColor(...PDF_LINE); doc.rect(x, y, w, 8); pdfText(doc, v[k] === '—' ? '' : v[k], x + w / 2, y + 5.5, { b: k === 0, s: 11, a: 'center' }); x += w; });
+    y += 8;
+  });
+  y += 6;
+  pdfText(doc, `DIP: ${m && m.dip ? m.dip + ' mm' : '________'}`, M, y, { s: 10.5 });
+  if (m && m.lente) pdfText(doc, `Lente recomendado: ${m.lente}${m.filtros ? ' (' + m.filtros + ')' : ''}`, M + 45, y, { s: 10, c: PDF_GRAY });
+  // Lunas
+  const { lunas, montura } = labLineas(o);
+  titulo('Lunas que se piden');
+  (lunas.length ? lunas : ['— (completar)']).forEach(l => {
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5);
+    doc.splitTextToSize('•  ' + l, R - M).forEach(t => { y += 5.5; pdfText(doc, t, M, y, { s: 10.5 }); });
+  });
+  // Montura
+  titulo('Montura');
+  y += 5.5; pdfText(doc, montura.length ? montura.join('  ·  ') : 'Montura del cliente', M, y, { s: 10.5 });
+  y += 5;
+  const bw = (R - M) / LAB_CAMPOS.length;
+  LAB_CAMPOS.forEach(([k, t], i) => {
+    const bx = M + i * bw;
+    doc.setDrawColor(...PDF_GRAY); doc.setLineWidth(0.25); doc.rect(bx + 1, y + 1, bw - 2, 15);
+    pdfText(doc, t, bx + bw / 2, y + 5.5, { s: 8, c: PDF_GRAY, a: 'center' });
+    pdfText(doc, lab[k] ? lab[k] + ' mm' : '', bx + bw / 2, y + 12.5, { b: true, s: 11, a: 'center' });
+  });
+  y += 17;
+  if (o.notas) {
+    titulo('Notas');
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5);
+    doc.splitTextToSize(o.notas, R - M).forEach(t => { y += 5.5; pdfText(doc, t, M, y, { s: 10.5 }); });
+  }
+  y += 14; pdfText(doc, `Atendió: ${socioName(o.por)}`, M, y, { s: 9, c: PDF_GRAY });
+  return doc.output('blob');
 }
 
 let jspdfP = null;
@@ -3643,7 +3755,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.25.2';
+const APP_VERSION = '2026.09.25.3';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {

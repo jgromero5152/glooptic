@@ -192,6 +192,9 @@ textarea.inp{min-height:76px;resize:vertical}
 .sgn{display:flex;align-items:center;gap:4px}
 .rtj{display:grid;gap:6px;padding:10px 12px;border-radius:12px;background:#fff4ec;border:1.5px solid #fbd5bd}
 .rtj[hidden]{display:none}
+.labm{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr))}
+.labm .f{gap:3px}
+@media (max-width:600px){.labm{grid-template-columns:repeat(3,minmax(0,1fr))}}
 .sgn .inp{min-width:0}
 .sgb{flex:none;width:34px;height:38px;border-radius:10px;border:1.5px solid var(--line);background:var(--surface-2);font:700 17px/1 var(--sans);color:var(--ink);cursor:pointer}
 .sgb[data-v="-"]{background:#edf2ff;border-color:#c7d5ff;color:#1640c4}
@@ -849,7 +852,7 @@ tbody tr.link:hover td{background:var(--surface-2)}
 <body>
 <div id="root"></div>
 <div id="print"></div>
-<script type="module" src="nube.js?v=2026.09.25.2"></script>
-<script src="app.js?v=2026.09.25.2"></script>
+<script type="module" src="nube.js?v=2026.09.25.3"></script>
+<script src="app.js?v=2026.09.25.3"></script>
 </body>
 </html>
