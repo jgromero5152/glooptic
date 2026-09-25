@@ -104,6 +104,7 @@ h1,h2,h3{font-family:var(--serif);font-weight:600;letter-spacing:-.02em;margin:0
 .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
 .g4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .split{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:18px;align-items:start}
+.split > *,.grid > *{min-width:0}
 
 .kpi{padding:18px 20px}
 .kpi .l{color:var(--muted);font-size:13px;font-weight:500;display:flex;align-items:center;gap:8px}
@@ -560,6 +561,33 @@ button.lnk{background:none;border:0;padding:0;cursor:pointer;font-size:13px}
   .cashc-side{grid-template-columns:repeat(auto-fit,minmax(110px,1fr));min-width:0}
   .cashc .hs b{font-size:17px}
 }
+/* tabla de precios de lunas en la venta */
+.lmat-w{margin:4px -2px 0;-webkit-overflow-scrolling:touch}
+.lmat{border-collapse:separate;border-spacing:0;min-width:100%}
+.lmat th{font-size:10.5px;text-transform:none;letter-spacing:0;white-space:nowrap;padding:6px 6px;text-align:center;background:#eef1f6;border:0}
+.lmat th:first-child{text-align:left;position:sticky;left:0;z-index:1;border-radius:8px 0 0 8px}
+.lmat th:last-child{border-radius:0 8px 8px 0}
+.lmat td{padding:4px;text-align:center;border-bottom:1px solid var(--line-2)}
+.lmat td.lr{text-align:left;white-space:nowrap;position:sticky;left:0;background:var(--surface-2);z-index:1;padding-right:10px}
+.lmat tr.auto td{background:#e6f8f0}
+.lmat td button{min-width:74px;padding:7px 8px;border-radius:10px;border:1.5px solid var(--line);background:#fff;font-weight:600;font-size:13px;cursor:pointer;font-variant-numeric:tabular-nums;white-space:nowrap}
+.lmat td button:hover{border-color:var(--accent);color:var(--accent-2)}
+.lmat td button.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-2)}
+.lmat tr.auto td button{border-color:#86d9b4}
+.lmat td button small{display:none}
+@media all{
+  .lmat-w{overflow:visible;margin:0}
+  .lmat,.lmat tbody{display:block;min-width:0}
+  .lmat thead{display:none}
+  .lmat tr{display:flex;flex-wrap:wrap;gap:6px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .lmat tr.auto{background:#e6f8f0;margin:0 -8px;padding:10px 8px;border-radius:12px}
+  .lmat tr.auto td{background:none}
+  .lmat td{border:0;padding:0}
+  .lmat td.lr{flex-basis:100%;position:static;background:none;white-space:normal}
+  .lmat td.nop{display:none}
+  .lmat td button{display:grid;gap:1px;min-width:0;padding:6px 10px;text-align:left}
+  .lmat td button small{display:block;font-size:11px;font-weight:600;color:var(--muted)}
+}
 /* tablero de órdenes */
 .kan{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}
 .kcol{background:color-mix(in srgb,var(--c) 5%,#f6f7f9);border:1px solid color-mix(in srgb,var(--c) 16%,var(--line));border-radius:16px;padding:12px;display:grid;gap:10px;min-height:240px;align-content:start;transition:background .15s,box-shadow .15s}
@@ -801,7 +829,7 @@ tbody tr.link:hover td{background:var(--surface-2)}
 <body>
 <div id="root"></div>
 <div id="print"></div>
-<script type="module" src="nube.js?v=2026.09.24.2"></script>
-<script src="app.js?v=2026.09.24.2"></script>
+<script type="module" src="nube.js?v=2026.09.24.3"></script>
+<script src="app.js?v=2026.09.24.3"></script>
 </body>
 </html>

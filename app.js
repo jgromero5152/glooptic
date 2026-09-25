@@ -1614,16 +1614,17 @@ routes['nueva-orden'] = {
       if (!t) { box.innerHTML = ''; return; }
       const med = medidaSel(), pot = potenciaMedida(med), auto = filaParaMedida(t, med);
       const fila = fSel ?? (auto >= 0 ? auto : tieneRangos(t) ? -1 : 0);
-      const aviso = !tieneRangos(t) ? 'Esta lista se elige a mano.'
-        : !med ? 'Sin medida: elige el rango a mano o registra la medida del paciente.'
-          : auto < 0 ? `<span style="color:var(--danger)">La medida (esf ±${n2r(pot.esf)}, cil −${n2r(pot.cil)}) pasa los rangos de esta lista. Elige el rango a mano o pon el precio.</span>`
-            : `Según la medida (esf ±${n2r(pot.esf)}, cil −${n2r(pot.cil)}) le corresponde el <b>rango ${esc(t.filas[auto].rango)}</b>.`;
-      const botones = t.cols.map((c, j) => { const p = precioTarifa(t, fila, j); return p ? `<button type="button" data-j="${j}">${esc(c)} <small>${money(p)}</small></button>` : ''; }).join('');
+      const aviso = !tieneRangos(t) ? 'Toca el precio del tratamiento para agregarlo.'
+        : !med ? 'Sin medida: toca el precio en la fila del rango que corresponde (o registra la medida del paciente).'
+          : auto < 0 ? `<span style="color:var(--danger)">La medida (esf ±${n2r(pot.esf)}, cil −${n2r(pot.cil)}) pasa los rangos de esta lista. Toca el precio a mano o ponlo en "Otro producto".</span>`
+            : `Según la medida (esf ±${n2r(pot.esf)}, cil −${n2r(pot.cil)}) le corresponde el <b>rango ${esc(t.filas[auto].rango)}</b> (marcado). Toca el precio del tratamiento.`;
+      // Tabla completa: rangos en filas y tratamientos (UV, AR, Blue…) en columnas; se toca el precio para agregarlo.
+      const tabla = `<div class="tbl-wrap lmat-w"><table class="lmat"><thead><tr><th>Rango</th>${t.cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
+        ${t.filas.map((f, i) => `<tr class="${i === auto ? 'auto' : ''} ${i === fila ? 'sel' : ''}"><td class="lr"><b>${esc(f.rango)}</b>${i === auto ? ' <span class="chip entr">Su medida</span>' : ''}${conRango(f) ? `<div class="muted small">esf ±${n2r(f.esf)} · cil −${n2r(f.cil)}</div>` : ''}</td>
+          ${t.cols.map((_, j) => { const pr = precioTarifa(t, i, j); return pr ? `<td><button type="button" data-f="${i}" data-j="${j}"><small>${esc(t.cols[j])}</small>${money(pr)}</button></td>` : '<td class="nop"><span class="muted">—</span></td>'; }).join('')}</tr>`).join('')}</tbody></table></div>`;
       box.innerHTML = `<div class="lpanel"><b>${esc(t.nombre)}</b>
-        <select class="inp sm" id="lfila" aria-label="Rango">${fila < 0 ? '<option value="-1" selected>Elige el rango…</option>' : ''}${t.filas.map((f, i) => `<option value="${i}" ${i === fila ? 'selected' : ''}>${esc(filaTexto(f))}${i === auto ? ' ✓' : ''}</option>`).join('')}</select>
         <div class="small muted">${aviso}</div>
-        <div class="pick" id="lcols">${botones || '<span class="muted small">Elige el rango para ver los precios.</span>'}</div>
-        ${botones ? '<div class="hint">Toca el tratamiento para agregarlo a la venta.</div>' : ''}
+        ${tabla}
         ${extrasLuna().length ? `<div class="fld">Extras<div class="pick" id="lext">${extrasLuna().map(p => `<button type="button" data-p="${p.id}">${icon('plus')} ${esc(p.nombre)} <small>${money(p.precio)}</small></button>`).join('')}</div></div>
         <div class="lcolor" id="lcolor" hidden><div class="seg" id="lctipo"><button type="button" data-t="completo" class="on">Completo</button><button type="button" data-t="degradado">Degradado</button></div>
           <div class="fg"><label class="f">Tono<input class="inp sm" id="lctono" list="ltonos" placeholder="Gris, marrón, verde…" autocomplete="off"><datalist id="ltonos">${TONOS.map(t => `<option value="${t}">`).join('')}</datalist></label>
@@ -1643,11 +1644,10 @@ routes['nueva-orden'] = {
         draft.items.push({ tipo: 'producto', ref: colorP.id, desc, cant: 1, precio: colorP.precio }); drawItems();
         $('#lcolor').hidden = true; toast('Color agregado: ' + desc);
       });
-      $('#lfila').onchange = e => { fSel = +e.target.value; panel(); };
-      $$('#lcols [data-j]').forEach(b => b.onclick = () => {
-        const j = +b.dataset.j;
-        draft.items.push({ tipo: 'luna', ref: t.id, col: j, fila, auto: fila === auto, desc: descLuna(t, fila, j), cant: 1, precio: precioTarifa(t, fila, j) });
-        b.classList.add('on'); drawItems(); // el panel queda abierto para agregar un extra (color)
+      $$('.lmat [data-j]').forEach(b => b.onclick = () => {
+        const j = +b.dataset.j, i = +b.dataset.f;
+        draft.items.push({ tipo: 'luna', ref: t.id, col: j, fila: i, auto: i === auto, desc: descLuna(t, i, j), cant: 1, precio: precioTarifa(t, i, j) });
+        b.classList.add('on'); drawItems(); toast('Agregado: ' + t.cols[j] + ' · ' + money(precioTarifa(t, i, j))); // el panel queda abierto para agregar un extra (color)
       });
     };
     // Si cambia la medida, las lunas que se pusieron solas se vuelven a calcular.
@@ -3501,12 +3501,14 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.24.2';
+const APP_VERSION = '2026.09.24.3';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
-    const v = (await (await fetch('version.txt?t=' + Date.now(), { cache: 'no-store' })).text()).trim();
-    if (v && v !== APP_VERSION && !$('.modal-bg')) { subir(); setTimeout(() => location.reload(), 500); }
+    const r = await fetch('version.txt?t=' + Date.now(), { cache: 'no-store' });
+    const v = r.ok ? (await r.text()).trim() : '';
+    // Solo se recarga si de verdad llegó un número de versión distinto (no una página de error).
+    if (/^\d{4}\.\d{2}\.\d{2}\.\w+$/.test(v) && v !== APP_VERSION && !$('.modal-bg') && !(draft && draft.items && draft.items.length)) { subir(); setTimeout(() => location.reload(), 500); }
   } catch (e) { }
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') buscarActualizacion(); });
