@@ -167,6 +167,19 @@ function itemLab(i, monturas) {
   if (i.tipo === 'montura') return (monturas.find(m => m.id === i.ref) || {}).clase !== 'sol';
   return i.tipo === 'otro' && /\b(lunas?|cristal|cristales|luna)\b/i.test(i.desc || '');
 }
+// Recargo por pagar con tarjeta: porcentaje por defecto en Ajustes (3.4 %), se puede cambiar en cada cobro.
+const pctTarjeta = () => db.config.recargoTarjeta ?? 3.4;
+const recargoItem = (base, pct) => ({ tipo: 'recargo', desc: `Recargo por pago con tarjeta (${String(pct).replace('.', ',')}%)`, cant: 1, precio: round2(base * pct / 100) });
+// Bloque que se muestra al elegir "Tarjeta": % editable y cuánto se cobra en total.
+const recargoHTML = () => `<div class="rtj" id="rtj" hidden><div class="row between wrap" style="gap:8px"><label class="row" style="gap:8px"><span class="small strong">Recargo por tarjeta</span><input class="inp sm num" id="rtjp" inputmode="decimal" style="width:70px;text-align:right" value="${pctTarjeta()}"><span class="small">%</span></label><span class="small">+ <b class="num" id="rtjm">S/ 0.00</b></span></div><div class="row between"><span class="muted small">Se cobra con tarjeta</span><b class="num" id="rtjt">S/ 0.00</b></div></div>`;
+function enlazarRecargo(root, base) {
+  const pint = () => {
+    const tj = $('[name=metodo]:checked', root)?.value === 'Tarjeta', pct = Math.max(0, numPago($('#rtjp', root).value)), b = base(), r = round2(b * pct / 100);
+    $('#rtj', root).hidden = !tj; $('#rtjm', root).textContent = money(r); $('#rtjt', root).textContent = money(b + r);
+  };
+  $$('[name=metodo]', root).forEach(x => x.addEventListener('change', pint)); $('#rtjp', root).oninput = pint; pint();
+  return { pint, pct: () => $('[name=metodo]:checked', root)?.value === 'Tarjeta' ? Math.max(0, numPago($('#rtjp', root).value)) : 0 };
+}
 // Montos escritos como "S/ 150" o "150 soles" también valen.
 const numPago = v => num(String(v ?? '').replace(/[^\d.,]/g, ''));
 // ---------- Nube: cuenta de la óptica y sincronización ----------
@@ -1581,6 +1594,7 @@ routes['nueva-orden'] = {
             <div class="big"><span>Total</span><span class="num" id="ttot">S/ 0.00</span></div></div>
             <label class="f"><span id="labono">A cuenta (abono)</span><input class="inp" name="abono" id="abono" inputmode="decimal" placeholder="0.00"></label>
             <div class="pay-opts">${METODOS.map((m, i) => `<label><input type="radio" name="metodo" value="${m}" ${i === 0 ? 'checked' : ''}><span>${m}</span></label>`).join('')}</div>
+            ${recargoHTML()}
             <div class="row between"><span class="muted">Resta</span><b class="num" id="tresta" style="font-size:18px">S/ 0.00</b></div>
             <div id="solo-encargo" class="form"><label class="f">Fecha de entrega<input class="inp" type="date" name="entrega" value="${esc(draft.entrega)}"></label>
             <label class="f">Notas para el laboratorio<textarea class="inp" name="notas" placeholder="Tipo de armado, altura, observaciones…">${esc(draft.notas)}</textarea></label></div>
@@ -1643,11 +1657,14 @@ routes['nueva-orden'] = {
       ab.readOnly = dir; $('#solo-encargo').hidden = dir;
       $('#ogo').innerHTML = `${icon('check')} ${dir ? 'Cobrar y entregar' : 'Registrar venta'}`;
       $('#tresta').textContent = money(Math.max(0, tot - numPago(ab.value)));
+      rtj && rtj.pint();
       resumen();
     };
+    let rtj = null;
     const esDirecta = () => draft.modo ? draft.modo === 'directa' : draft.items.length > 0 && !draft.items.some(i => itemLab(i, db.monturas));
     $$('#vtipo button').forEach(b => b.onclick = () => { draft.modo = b.dataset.v; calc(); });
     $('#tdesc').oninput = calc; $('#abono').oninput = calc;
+    rtj = enlazarRecargo($('#oform'), () => { const tot = round2(draft.items.reduce((s, i) => s + num(i.cant) * num(i.precio), 0) - num(draft.descuento)); return round2(Math.min(numPago($('#abono').value), Math.max(0, tot))); });
     buscadorMonturas($('#mcode'), $('#mres'), m => {
       if (num(m.stock) <= 0) toast('Atención: esta montura figura sin stock');
       draft.items.push({ tipo: 'montura', ref: m.id, desc: descMontura(m), cant: 1, precio: m.precio });
@@ -1803,9 +1820,10 @@ routes['nueva-orden'] = {
       const registrar = monto => {
         const o = { id: uid(), numero: db.config.nextOrden++, pacienteId: draft.pacienteId, medidaId: draft.medidaId, fecha: hoy(), items, descuento: num(f.descuento), entrega: dir ? hoy() : f.entrega, notas: dir ? '' : f.notas, estado: dir ? 'entregado' : 'pendiente', por: user, creado: Date.now() };
         if (dir) Object.assign(o, { entregado: hoy(), directa: true });
-        const ab = round2(Math.min(monto, tot));
+        const ab = round2(Math.min(monto, tot)), pct = rtj.pct(), rec = ab > 0 && pct > 0 ? recargoItem(ab, pct) : null;
+        if (rec && rec.precio > 0) o.items.push(rec);
         db.ordenes.push(o);
-        if (ab > 0) db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto: ab, metodo: f.metodo, por: user, ts: Date.now(), tipo: 'abono' });
+        if (ab > 0) db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto: round2(ab + (rec ? rec.precio : 0)), metodo: f.metodo, por: user, ts: Date.now(), tipo: 'abono' });
         moverStock(items, -1);
         save(); draft = null; toast(dir ? `Venta N° ${pad(o.numero)} cobrada y entregada` : `Orden N° ${pad(o.numero)} registrada`); go('#/orden/' + o.id);
         if (f.cptipo) emitirForm(o, f.cptipo);
@@ -1891,14 +1909,18 @@ function cobrarForm(o, luego) {
     body: `<form id="cf" class="form">${fechaCerrada ? `<div class="lock-note">${icon('lock')}<div>La caja de hoy ya está cerrada; se pedirá la clave de ambos socios.</div></div>` : ''}
       <div class="row between"><span class="muted">Saldo pendiente</span><b class="num" style="font-size:20px">${money(s)}</b></div>
       <label class="f">Monto<input class="inp" name="monto" inputmode="decimal" value="${s.toFixed(2)}" required></label>
-      <div class="pay-opts">${METODOS.map((m, i) => `<label><input type="radio" name="metodo" value="${m}" ${i === 0 ? 'checked' : ''}><span>${m}</span></label>`).join('')}</div></form>`,
+      <div class="pay-opts">${METODOS.map((m, i) => `<label><input type="radio" name="metodo" value="${m}" ${i === 0 ? 'checked' : ''}><span>${m}</span></label>`).join('')}</div>
+      ${recargoHTML()}</form>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn accent" form="cf">${icon('check')} Registrar pago</button>`,
     onMount: bg => {
+      const rtj = enlazarRecargo(bg, () => round2(Math.min(numPago($('[name=monto]', bg).value), s)));
+      $('[name=monto]', bg).addEventListener('input', rtj.pint);
       $('#cf', bg).onsubmit = e => {
         e.preventDefault();
         const f = readForm(e.target), monto = round2(Math.min(numPago(f.monto), s));
         if (monto <= 0) { toast('Monto inválido'); return; }
-        const doit = () => { db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto, metodo: f.metodo, por: user, ts: Date.now(), tipo: 'saldo' }); save(); closeModal(); if (luego) luego(); else { toast('Pago registrado'); render(); } };
+        const pct = rtj.pct(), rec = pct > 0 ? recargoItem(monto, pct) : null;
+        const doit = () => { if (rec && rec.precio > 0) o.items.push(rec); db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto: round2(monto + (rec ? rec.precio : 0)), metodo: f.metodo, por: user, ts: Date.now(), tipo: 'saldo' }); save(); closeModal(); if (luego) luego(); else { toast('Pago registrado'); render(); } };
         fechaCerrada ? dual(`Registrar pago con la caja del ${fdate(hoy())} cerrada`, doit) : doit();
       };
     },
@@ -2911,6 +2933,7 @@ function repTipo(it) {
   if (it.tipo === 'montura') return db.monturas.find(m => m.id === it.ref)?.clase === 'sol' ? 'Lentes de sol' : 'Monturas';
   if (it.tipo === 'luna') return 'Lunas';
   if (it.tipo === 'producto') return 'Accesorios';
+  if (it.tipo === 'recargo') return 'Recargo tarjeta';
   return 'Otros';
 }
 // Dona fina con un espacio entre partes; al centro va el total.
@@ -3330,6 +3353,7 @@ routes.ajustes = {
           <label class="f">Teléfono<input class="inp" name="telefono" value="${esc(c.telefono)}"></label>
           <label class="f">Dirección<input class="inp" name="direccion" value="${esc(c.direccion)}"></label>
           <label class="f">Recordar control visual cada (meses)<input class="inp" name="recordatorioMeses" inputmode="numeric" value="${esc(c.recordatorioMeses)}"></label>
+          <label class="f">Recargo por pago con tarjeta (%) <span class="hint">se suma al cobrar con tarjeta; 0 = sin recargo</span><input class="inp" name="recargoTarjeta" inputmode="decimal" value="${esc(pctTarjeta())}"></label>
           <button class="btn primary">Guardar</button></form></div></div>
         <div class="card" style="grid-column:1/-1"><div class="card-h"><div><h3>Boletas y facturas</h3><div class="sub">Estos datos salen en el PDF de cada comprobante.</div></div></div><div class="card-b"><form id="factf" class="form">
           <div class="fg fg3">
@@ -3410,7 +3434,7 @@ routes.ajustes = {
     }
     $('#ajlock') && ($('#ajlock').onclick = () => { ajustesAbierto = false; render(); });
     $('#cdcambiar') && ($('#cdcambiar').onclick = () => crearClaveDueno(null, true));
-    $('#cfg').onsubmit = e => { e.preventDefault(); const f = readForm(e.target); Object.assign(db.config, f, { recordatorioMeses: num(f.recordatorioMeses) || 12 }); save(); toast('Datos guardados'); render(); };
+    $('#cfg').onsubmit = e => { e.preventDefault(); const f = readForm(e.target); Object.assign(db.config, f, { recordatorioMeses: num(f.recordatorioMeses) || 12, recargoTarjeta: Math.max(0, numPago(f.recargoTarjeta)) }); save(); toast('Datos guardados'); render(); };
     $$('[data-per]').forEach(b => b.onclick = () => personaForm(socio(b.dataset.per)));
     $('#padd') && ($('#padd').onclick = () => personaForm());
     $('#factf').onsubmit = e => {
@@ -3617,7 +3641,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.24.8';
+const APP_VERSION = '2026.09.25.1';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
