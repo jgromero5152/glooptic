@@ -1,6 +1,6 @@
 // Permite abrir el sistema sin internet: primero intenta la red y, si no hay, usa la copia guardada.
-const CACHE = 'optica-v3';
-const FILES = ['./', './index.html', './app.js', './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './jspdf.umd.min.js', './logo-mark.png', './logo-glooptic.png'];
+const CACHE = 'terraoptica-v2';
+const FILES = ['./', './index.html', './app.js', './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './jspdf.umd.min.js', './logo-mark.png', './nube.js', './firebase-config.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
@@ -13,10 +13,12 @@ const fetchFresco = req => new Request(req.url, { cache: 'no-cache', credentials
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const propio = e.request.url.startsWith(self.location.origin);
+  // La conexión con la nube (Firestore, cuentas) va directo: solo se guardan los archivos de la app.
+  if (!propio && !/fonts\.g|gstatic\.com\/firebasejs/.test(e.request.url)) return;
   e.respondWith(
     fetch(propio ? fetchFresco(e.request) : e.request)
       .then(r => {
-        if (r.ok && (propio || e.request.url.includes('fonts.g'))) {
+        if (r.ok && (propio || e.request.url.includes('fonts.g') || e.request.url.includes('gstatic.com/firebasejs'))) {
           const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy));
         }
         return r;

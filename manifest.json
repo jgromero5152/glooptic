@@ -1,7 +1,7 @@
 {
-  "name": "Glooptic · Sistema de óptica",
-  "short_name": "Glooptic",
-  "description": "Pacientes, medidas, órdenes y caja diaria de la óptica.",
+  "name": "TerraÓptica · Sistema para ópticas",
+  "short_name": "TerraÓptica",
+  "description": "Pacientes, medidas, ventas, caja e inventario de tu óptica.",
   "lang": "es",
   "start_url": "./",
   "scope": "./",

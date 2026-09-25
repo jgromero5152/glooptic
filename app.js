@@ -1,10 +1,12 @@
-/* Sistema para óptica — pacientes, medidas, órdenes, inventario y caja diaria.
-   Todo se guarda en este navegador (localStorage). Respaldo con Ajustes → Exportar. */
+/* TerraÓptica — sistema para ópticas: pacientes, medidas, órdenes, inventario y caja diaria.
+   Cada óptica tiene su cuenta; los datos viven en la nube (Firebase, ver nube.js) con copia en el equipo. */
 'use strict';
 
 // ---------- Utilidades ----------
-const KEY = 'optica-db-v1';
-const SESSION = 'optica-user';
+const SOPORTE_WA = '51936156452'; // WhatsApp de TerraÓptica para activar planes y ayuda
+// Registro libre de ópticas nuevas (con prueba gratis). Apagado por ahora: las cuentas las crea José desde su panel.
+// Para abrirlo también hay que cambiar registroAbierto() en firestore.rules.
+const REGISTRO_ABIERTO = false;
 const METODOS = ['Efectivo', 'Yape', 'Plin', 'Tarjeta', 'Transferencia'];
 const METODO_COLOR = { Efectivo: '#1baf7a', Tarjeta: '#eb6834', Yape: '#4a3aa7', Transferencia: '#eda100', Plin: '#2a78d6' };
 // Orden para barras y donas: así dos colores parecidos nunca quedan juntos.
@@ -82,9 +84,13 @@ const I = {
   bars: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9M13 17V5M8 17v-3"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  board: '<rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="11" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/>',
+  bag: '<path d="M5 8h14l-1.2 12H6.2z"/><path d="M9 8V7a3 3 0 0 1 6 0v1"/>',
   chart: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/>',
 };
-const TILE = { inicio: '#2563eb', pacientes: '#7c3aed', ordenes: '#f79009', caja: '#079455', reportes: '#4f46e5', inventario: '#0891b2', recordatorios: '#e11d48', ajustes: '#475467', mas: '#475467' };
+const TILE = { inicio: '#1e4fea', pacientes: '#0891b2', ordenes: '#7c3aed', caja: '#059669', reportes: '#4f46e5', inventario: '#c026d3', recordatorios: '#e11d48', ajustes: '#475569', mas: '#475569' };
+// Encabezado de la barra superior: [antetítulo, título] por sección.
+const CABECERA = { inicio: ['Resumen del día', 'Inicio'], pacientes: ['Fichas y medidas', 'Pacientes'], paciente: ['Pacientes', 'Ficha del paciente'], ordenes: ['Laboratorio y entregas', 'Pedidos'], orden: ['Pedidos', 'Detalle del pedido'], 'nueva-orden': ['Vender', 'Nueva venta'], caja: ['Cobros y gastos', 'Caja del día'], reportes: ['Cómo va la óptica', 'Reportes'], inventario: ['Stock', 'Inventario'], recordatorios: ['Clientes para llamar', 'Recordatorios'], ajustes: ['Tu óptica', 'Ajustes'], aprobar: ['Autorización', 'Aprobar pedido'] };
 const tile = (k, i) => `<span class="tile" style="--c:${TILE[k]}">${icon(i)}</span>`;
 const icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${I[n] || ''}</svg>`;
 
@@ -105,19 +111,15 @@ const ABREV_DEF = () => ({
     ['Verde', 'VER'], ['Rosa', 'RO'], ['Rojo', 'ROJ'], ['Vino', 'VIN'], ['Morado', 'MOR'], ['Amarillo', 'AMA'], ['Nude', 'NUD'], ['Transparente', 'TRA']],
 });
 const ABREV_GRUPOS = [['genero', 'Para'], ['material', 'Material'], ['forma', 'Forma'], ['aro', 'Aro'], ['color', 'Colores']];
-let db = load();
-let user = null;
-try { user = sessionStorage.getItem(SESSION); } catch (e) { }
+let db = null; // se llena con los datos de la nube al entrar a la cuenta
+let user = null; // persona de la óptica que usa el sistema (sale del usuario con que se inició sesión)
 
+// Una óptica nueva empieza sin listas de precios de lunas: cada una arma las suyas en Inventario.
 function blank() {
   return {
     config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, nextMontura: 1, socios: [], fact: FACT_DEF(), abrev: ABREV_DEF(), tarifasV: 1, productosV: 2, directaV: 1 },
-    pacientes: [], medidas: [], monturas: [], cristales: [], tarifas: tarifasDef(), productos: productosDef(), anuladas: [], ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [], comprobantes: [],
+    pacientes: [], medidas: [], monturas: [], cristales: [], tarifas: [], productos: productosDef(), anuladas: [], ordenes: [], pagos: [], gastos: [], vales: [], cierres: [], log: [], comprobantes: [], aprobaciones: [],
   };
-}
-function load() {
-  try { const r = localStorage.getItem(KEY); if (r) return normDb(Object.assign(blank(), JSON.parse(r))); } catch (e) { }
-  return null;
 }
 // Completa los datos guardados con versiones anteriores del sistema.
 function normDb(d) {
@@ -125,6 +127,7 @@ function normDb(d) {
   if (!d.config.fact.ruc && d.config.ruc) d.config.fact.ruc = d.config.ruc;
   if (!d.config.fact.direccion && d.config.direccion) d.config.fact.direccion = d.config.direccion;
   d.comprobantes = d.comprobantes || [];
+  d.aprobaciones = d.aprobaciones || [];
   // La lista de precios de lunas se carga una sola vez; después solo la cambia el dueño.
   if (!d.config.tarifasV) { if (!d.tarifas || !d.tarifas.length) d.tarifas = tarifasDef(); d.config.tarifasV = 1; }
   d.tarifas = d.tarifas || [];
@@ -152,6 +155,10 @@ function normDb(d) {
     if (m.material === 'Acetato') m.material = 'Pasta';
     if (m.material === 'Aire / al aire') { m.material = ''; m.aro = m.aro || 'Al aire'; }
   });
+  // Roles (dueño, socio, vendedor): antes solo había socios.
+  const S = d.config.socios || [];
+  if (S.length && !S.some(x => x.id === d.config.duenoId)) d.config.duenoId = (S.find(x => /jorge/i.test(x.nombre)) || S[0]).id;
+  S.forEach(x => { if (!x.rol) x.rol = x.id === d.config.duenoId ? 'dueno' : 'socio'; });
   return d;
 }
 // Lo que va al laboratorio: lunas, cristales y monturas ópticas (no lentes de sol ni accesorios).
@@ -162,53 +169,176 @@ function itemLab(i, monturas) {
 }
 // Montos escritos como "S/ 150" o "150 soles" también valen.
 const numPago = v => num(String(v ?? '').replace(/[^\d.,]/g, ''));
-// La primera vez pone el logo de la óptica en los comprobantes; luego se puede cambiar en Ajustes.
-async function logoInicial() {
-  const F = db && db.config.fact;
-  if (!F || F.logo || F.logoAuto) return;
-  try {
-    const bl = await (await fetch('logo-glooptic.png')).blob();
-    const url = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(bl); });
-    const im = new Image(); im.src = url; await im.decode();
-    Object.assign(F, { logo: url, logoRatio: im.width / im.height, logoAuto: true }); save();
-  } catch (e) { }
+// ---------- Nube: cuenta de la óptica y sincronización ----------
+// Cada registro (paciente, orden, pago…) se guarda aparte en la nube, repartido en varios documentos.
+// Así dos equipos pueden trabajar a la vez sin pisarse: solo se sube lo que cambió.
+const COLS = { pacientes: 16, medidas: 16, monturas: 16, ordenes: 16, pagos: 16, comprobantes: 16, gastos: 4, log: 4, anuladas: 4, vales: 2, cierres: 2, cristales: 2, aprobaciones: 2 };
+const LISTAS = ['tarifas', 'productos']; // se guardan completas en el documento "listas"
+let sesion = { cargando: true }; // { usuario, perfil, optica, error }
+let quitarDatos = null;
+let remoto = {};   // documento de la nube → { id: json }
+let sinc = {};     // colección → { id: json } que la nube ya tiene (o que ya se envió)
+let datosListos = false, permitirBorrado = false, pendienteRender = false, timerSubida = null, registrando = false;
+
+const cubeta = (id, n) => { let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) | 0; return (h >>> 0) % n; };
+const docDe = (col, id) => col === 'config' || col === 'listas' ? col : `${col}~${cubeta(id, COLS[col])}`;
+const colDeDoc = d => d.split('~')[0];
+const ordenar = d => {
+  for (const col in COLS) d[col].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  d.log.sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
+  d.cierres.sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+};
+// Lo que hay ahora en el equipo, en el mismo formato que la nube.
+function estadoLocal() {
+  const out = { config: {}, listas: {} };
+  for (const k in db.config) if (db.config[k] !== undefined) out.config[k] = JSON.stringify(db.config[k]);
+  for (const k of LISTAS) out.listas[k] = JSON.stringify(db[k] || []);
+  for (const col in COLS) { const m = out[col] = {}; for (const r of db[col] || []) { if (!r.id) r.id = uid(); m[r.id] = JSON.stringify(r); } }
+  return out;
 }
-let avisoNoGuardo = false;
-function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(db)); avisoNoGuardo = false; }
-  catch (e) {
-    // Aviso grande una vez: si no se guarda, hay que sacar un respaldo antes de cerrar la app.
-    if (!avisoNoGuardo) { avisoNoGuardo = true; alert('Atención: no se pudo guardar el último cambio en este equipo.\n\nNo cierres la app. Toca "Enviar copia" en Inicio (o Ajustes → Descargar respaldo) y avísanos.\n\nDetalle: ' + e.message); }
-    else toast('No se pudo guardar: ' + e.message);
+// Arma los datos completos a partir de lo que llegó de la nube (null si la óptica todavía no se configuró).
+function dbDesdeRemoto() {
+  const d = blank(), cfg = {};
+  for (const col in COLS) d[col] = [];
+  for (const docId in remoto) {
+    const col = colDeDoc(docId), r = remoto[docId];
+    for (const id in r) {
+      let v; try { v = JSON.parse(r[id]); } catch (e) { continue; }
+      if (col === 'config') cfg[id] = v; else if (col === 'listas') d[id] = v; else if (COLS[col]) d[col].push(v);
+    }
   }
+  if (!cfg.socios || !cfg.socios.length) return null;
+  Object.assign(d.config, cfg);
+  ordenar(d);
+  return normDb(d);
 }
-// Respaldo: el archivo va como .txt para que el celular deje enviarlo por WhatsApp (no acepta .json); adentro es el mismo JSON.
+function sincDesdeRemoto() {
+  const s = {};
+  for (const docId in remoto) { const col = colDeDoc(docId); s[col] = s[col] || {}; Object.assign(s[col], remoto[docId]); }
+  return s;
+}
+// Guarda: se junta lo que cambió y se sube en un momento (la nube también lo guarda en el equipo si no hay internet).
+function save() {
+  if (!db || !datosListos) return;
+  if (soloLectura()) { toast(avisoPlan().corto); restaurarDesdeNube(); return; }
+  clearTimeout(timerSubida); timerSubida = setTimeout(subir, 300);
+}
+function subir() {
+  clearTimeout(timerSubida); timerSubida = null;
+  if (!db || !datosListos || !sesion.optica || soloLectura()) return;
+  const loc = estadoLocal();
+  let cambios = [];
+  for (const col in loc) {
+    const s = sinc[col] || {}, l = loc[col];
+    for (const id in l) if (s[id] !== l[id]) cambios.push({ col, id, doc: docDe(col, id), json: l[id] });
+    for (const id in s) if (!(id in l)) cambios.push({ col, id, doc: docDe(col, id), json: null });
+  }
+  if (!cambios.length) return;
+  // Freno de seguridad: nunca se borran muchos registros de golpe, salvo "Empezar de cero" o "Restaurar respaldo".
+  const borrados = cambios.filter(c => c.json == null).length;
+  if (borrados > 25 && !permitirBorrado) {
+    alert(`Se evitó borrar ${borrados} registros de golpe. Tus datos siguen guardados en la nube.\n\nSi querías borrarlo todo, usa Ajustes → Empezar de cero.`);
+    restaurarDesdeNube(); return;
+  }
+  permitirBorrado = false;
+  // Cada documento de la nube aguanta hasta 1 MB: se avisa antes de llegar al límite.
+  const pesos = {};
+  for (const col in loc) for (const id in loc[col]) { const d = docDe(col, id); pesos[d] = (pesos[d] || 0) + loc[col][id].length + id.length + 8; }
+  const lleno = [...new Set(cambios.map(c => c.doc))].find(d => pesos[d] > 950000);
+  if (lleno) { alert('No se pudo guardar: una parte de tus datos llegó al límite de espacio. Escríbenos por WhatsApp para ampliarlo.'); restaurarDesdeNube(); return; }
+  cambios.forEach(c => { const s = sinc[c.col] || (sinc[c.col] = {}); if (c.json == null) delete s[c.id]; else s[c.id] = c.json; });
+  // Devuelve la subida (true cuando la nube la recibió), para quien necesite esperarla.
+  return Nube.escribir(sesion.optica.id, cambios).then(() => true, e => { toast('No se pudo guardar en la nube: ' + Nube.mensaje(e)); return false; });
+}
+// Vuelve a lo que dice la nube (se usa si un cambio no se puede guardar).
+function restaurarDesdeNube() { db = dbDesdeRemoto(); sinc = sincDesdeRemoto(); render(); }
+// Cambia un objeto por otro sin perder la referencia (los formularios abiertos siguen apuntando al mismo).
+function reemplazar(dest, src) {
+  if (Array.isArray(dest) && Array.isArray(src)) { dest.splice(0, dest.length, ...src); return dest; }
+  for (const k of Object.keys(dest)) if (!(k in src)) delete dest[k];
+  return Object.assign(dest, src);
+}
+// Llegan cambios de la nube (de este u otro equipo).
+function recibirDatos(cambios, meta) {
+  const antes = {};
+  for (const c of cambios) { antes[c.id] = remoto[c.id] || {}; if (c.tipo === 'removed') delete remoto[c.id]; else remoto[c.id] = c.r; }
+  if (!datosListos) {
+    if (meta.desdeCache && !meta.total) return; // todavía no llegó nada del servidor
+    datosListos = true; db = dbDesdeRemoto(); sinc = sincDesdeRemoto();
+    if (db) subir(); // sube lo que normDb haya completado
+    render(); return;
+  }
+  if (!db) { db = dbDesdeRemoto(); sinc = sincDesdeRemoto(); if (db) render(); return; }
+  const loc = estadoLocal(); let hubo = false;
+  for (const c of cambios) {
+    const col = colDeDoc(c.id), prev = antes[c.id], next = remoto[c.id] || {};
+    for (const id of new Set([...Object.keys(prev), ...Object.keys(next)])) {
+      const j = next[id] ?? null, s = sinc[col] || (sinc[col] = {});
+      if ((s[id] ?? null) === j) continue; // ya lo teníamos (por ejemplo, lo que acabamos de subir)
+      if ((loc[col]?.[id] ?? null) !== (s[id] ?? null)) continue; // hay un cambio local sin subir: gana el local
+      if (j == null) delete s[id]; else s[id] = j;
+      aplicar(col, id, j == null ? null : JSON.parse(j)); hubo = true;
+    }
+  }
+  if (hubo) { ordenar(db); pintarSiSeguro(); }
+}
+function aplicar(col, id, v) {
+  if (col === 'config') { if (v == null) delete db.config[id]; else if (v && typeof v === 'object' && db.config[id] && typeof db.config[id] === 'object') reemplazar(db.config[id], v); else db.config[id] = v; return; }
+  if (col === 'listas') { if (Array.isArray(db[id]) && Array.isArray(v)) reemplazar(db[id], v); else db[id] = v || []; return; }
+  if (!COLS[col]) return;
+  const arr = db[col], i = arr.findIndex(r => r.id === id);
+  if (v == null) { if (i >= 0) arr.splice(i, 1); } else if (i >= 0) reemplazar(arr[i], v); else arr.push(v);
+}
+// No se redibuja mientras alguien escribe o tiene una ventana abierta; se hace después.
+function pintarSiSeguro() {
+  const a = document.activeElement, escribiendo = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+  if ($('.modal-bg') || escribiendo || /^\/?(nueva-orden|ajustes)/.test(route)) { pendienteRender = true; return; }
+  pendienteRender = false; render();
+}
+setInterval(() => { if (pendienteRender) pintarSiSeguro(); }, 4000);
+addEventListener('pagehide', () => subir());
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') subir(); });
+
+// Estado del plan de la óptica.
+const diasPlan = () => Math.ceil(((sesion.optica?.vence || 0) - Date.now()) / 864e5);
+const soloLectura = () => { const o = sesion.optica; return !o || o.estado === 'bloqueada' || o.estado === 'vencida' || (o.vence || 0) < Date.now(); };
+function avisoPlan() {
+  const o = sesion.optica || {}, d = diasPlan(), vence = o.vence ? fdate(ymd(new Date(o.vence))) : '—';
+  const gratis = o.plan === 'gratis';
+  if (soloLectura()) return { tipo: 'mal', corto: 'Tu plan venció: puedes ver tus datos, pero no registrar cambios.', largo: `Tu ${gratis ? 'acceso gratis' : o.estado === 'prueba' ? 'prueba gratis' : 'plan'} venció el ${vence}. Puedes ver todos tus datos, pero para registrar ventas y cambios hay que activar el plan.` };
+  if (o.estado === 'prueba' && gratis) return { tipo: d <= 5 ? 'warn' : 'info', corto: `Gratis hasta el ${vence}`, largo: `Tienes TerraÓptica gratis, con todas las funciones, hasta el ${vence}.` };
+  if (o.estado === 'prueba') return { tipo: d <= 5 ? 'warn' : 'info', corto: `Prueba gratis: ${d === 1 ? 'queda 1 día' : `quedan ${d} días`}`, largo: `Estás usando la prueba gratis de TerraÓptica. ${d === 1 ? 'Queda 1 día' : `Quedan ${d} días`} (hasta el ${vence}).` };
+  return { tipo: d <= 5 ? 'warn' : 'ok', corto: `Plan activo hasta el ${vence}`, largo: `Tu plan está activo hasta el ${vence}.` };
+}
+const waSoporte = txt => waLink(SOPORTE_WA, txt);
+// Aviso en Inicio: solo cuando hace falta (prueba, por vencer o vencido).
+function avisoSuscripcion() {
+  const a = avisoPlan();
+  if (a.tipo === 'ok') return '';
+  const txt = `Hola, quiero activar TerraÓptica para mi óptica ${db.config.nombre || sesion.optica?.nombre || ''}.`;
+  return `<div class="plan-note ${a.tipo}">${icon(a.tipo === 'mal' ? 'lock' : 'clock')}<div class="grow"><b>${esc(a.corto)}</b>${a.tipo !== 'info' ? `<br>${esc(a.largo)}` : ''}</div>
+    <a class="btn sm ${a.tipo === 'info' ? '' : 'primary'}" href="${waSoporte(txt)}" target="_blank" rel="noopener">Activar mi plan</a></div>`;
+}
+// Respaldo manual: el archivo va como .txt para que el celular deje enviarlo por WhatsApp (no acepta .json); adentro es el mismo JSON.
 const nombreRespaldo = ext => `respaldo-${(db.config.nombre || 'optica').toLowerCase().replace(/\s+/g, '-')}-${hoy()}.${ext}`;
 const respaldoHecho = () => { db.config.ultimoRespaldo = Date.now(); save(); render(); };
 async function descargarRespaldo() { if (await saveFile(nombreRespaldo('json'), JSON.stringify(db))) respaldoHecho(); }
-const puedeEnviarRespaldo = (() => { try { return !!(navigator.canShare && navigator.canShare({ files: [new File(['{}'], 'r.txt', { type: 'text/plain' })] })); } catch (e) { return false; } })();
-async function enviarRespaldo() {
-  const file = new File([JSON.stringify(db)], nombreRespaldo('txt'), { type: 'text/plain' });
-  if (puedeEnviarRespaldo && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file] }); respaldoHecho(); return; } catch (e) { if (e.name === 'AbortError') return; }
-  }
-  descargarRespaldo();
-}
-// Recordatorio en Inicio para el dueño: los datos viven solo en este equipo hasta que exista la nube.
-function avisoRespaldo() {
-  if (user !== dueno()?.id) return '';
-  const nM = db.monturas.length, nP = db.pacientes.length, nO = db.ordenes.length;
-  if (!nM && !nP && !nO) return '';
-  const u = db.config.ultimoRespaldo, dias = u ? Math.floor((Date.now() - u) / 864e5) : null;
-  if (u && dias < 1) return '';
-  const partes = [nM && `${nM} ${nM === 1 ? 'montura' : 'monturas'}`, nP && `${nP} ${nP === 1 ? 'paciente' : 'pacientes'}`, nO && `${nO} ${nO === 1 ? 'venta' : 'ventas'}`].filter(Boolean);
-  const lista = partes.length > 1 ? partes.slice(0, -1).join(', ') + ' y ' + partes[partes.length - 1] : partes[0];
-  return `<div class="lock-note resp-note">${icon('down')}<div class="grow"><b>Guarda una copia de tus datos</b><br>${u ? `Tu último respaldo fue hace ${dias} ${dias === 1 ? 'día' : 'días'}.` : 'Todavía no has guardado ningún respaldo.'} Lo que registraste (${lista}) está guardado solo en este equipo. Envíate la copia por WhatsApp o guárdala en Drive.</div>
-    <div class="actions">${puedeEnviarRespaldo ? `<button class="btn sm primary" id="resp-env">Enviar copia</button>` : ''}<button class="btn sm${puedeEnviarRespaldo ? '' : ' primary'}" id="resp-desc">Descargar</button></div></div>`;
-}
 const socio = id => db.config.socios.find(s => s.id === id);
 const socioName = id => socio(id)?.nombre || '—';
-const me = () => socio(user);
+const me = () => { const s = socio(user); return s && !s.baja ? s : null; };
+// Roles: el dueño puede todo, el socio casi todo y el vendedor lo necesario para atender.
+const ROLES = { dueno: 'Dueño', socio: 'Socio', vendedor: 'Vendedor' };
+const activos = () => db.config.socios.filter(s => !s.baja);
+const socioRol = s => !s ? 'vendedor' : s.id === dueno()?.id ? 'dueno' : s.rol === 'vendedor' ? 'vendedor' : 'socio';
+const miRol = () => socioRol(me());
+// Dueño y socios: autorizan los cambios delicados con su clave y se reparten la ganancia.
+const autorizantes = () => activos().filter(s => socioRol(s) !== 'vendedor');
+// Lo que NO puede hacer cada rol; todo lo demás sí.
+const PROHIBIDO = {
+  socio: ['ajustes'],
+  vendedor: ['ajustes', 'reportes', 'costos', 'descuentos', 'gastos', 'vales', 'cerrarCaja', 'otrosDias', 'ganancias', 'editarInventario', 'excel'],
+};
+const puede = accion => !(PROHIBIDO[miRol()] || []).includes(accion);
 const paciente = id => db.pacientes.find(p => p.id === id);
 const orden = id => db.ordenes.find(o => o.id === id);
 const medidasDe = pid => db.medidas.filter(m => m.pacienteId === pid).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.creado - a.creado);
@@ -220,6 +350,40 @@ const saldoOrden = o => round2(totalOrden(o) - pagadoOrden(o));
 const cerrado = f => db.cierres.some(c => c.fecha === f);
 const ultimaMedida = pid => medidasDe(pid)[0];
 const addLog = (accion, autoriza) => { db.log.unshift({ ts: new Date().toISOString(), accion, por: user, autoriza: autoriza || null }); db.log = db.log.slice(0, 500); };
+
+// ---------- Búsqueda por DNI o RUC ----------
+// Nombres en mayúsculas (como vienen de RENIEC) → "Juan Pérez".
+const tituloNombre = t => String(t || '').toLowerCase().replace(/(^|[\s'-])([a-záéíóúñü])/g, (m, a, b) => a + b.toUpperCase());
+// Al completar los 8 números del DNI (u 11 del RUC) se llenan solos el nombre y, con RUC, la dirección.
+// Primero se mira si ya es paciente (no gasta consulta); si no, se busca en la nube. Nunca pisa lo que ya se escribió a mano.
+function enlazarDoc(fDoc, fNom, fDir, { mayus = false } = {}) {
+  if (!fDoc) return;
+  const aviso = document.createElement('div'); aviso.className = 'hint'; aviso.style.margin = '4px 0 0';
+  fDoc.insertAdjacentElement('afterend', aviso);
+  let ultimo = '', autoNom = '', autoDir = '';
+  const poner = (campo, valor, previo) => { if (campo && (!campo.value.trim() || campo.value === previo)) campo.value = valor; return valor; };
+  fDoc.addEventListener('input', async () => {
+    const n = fDoc.value.replace(/\D/g, ''), tipo = n.length === 8 ? 'dni' : n.length === 11 ? 'ruc' : '';
+    if (!tipo || n === ultimo) { if (!tipo) aviso.textContent = ''; return; }
+    ultimo = n;
+    // Lo que se llenó solo con el número anterior se borra; lo escrito a mano se respeta.
+    if (fNom && autoNom && fNom.value === autoNom) fNom.value = '';
+    if (fDir && autoDir && fDir.value === autoDir) fDir.value = '';
+    autoNom = autoDir = '';
+    const ya = tipo === 'dni' && db.pacientes.find(p => String(p.dni || '') === n);
+    if (ya) { autoNom = poner(fNom, mayus ? ya.nombre.toUpperCase() : ya.nombre, autoNom); aviso.innerHTML = `Ya es paciente: <b>${esc(ya.nombre)}</b>`; return; }
+    if (!Nube.CONSULTAS) return;
+    aviso.textContent = 'Buscando…';
+    try {
+      const d = await Nube.consultarDoc(tipo, n);
+      if (fDoc.value.replace(/\D/g, '') !== n) return;
+      const nom = tipo === 'dni' && !mayus ? tituloNombre(d.nombre) : d.nombre;
+      autoNom = poner(fNom, nom, autoNom);
+      if (tipo === 'ruc') autoDir = poner(fDir, [d.direccion, d.distrito, d.provincia].filter(x => x && x !== '-').join(', '), autoDir);
+      aviso.innerHTML = `${icon('check')} ${esc(nom)}${tipo === 'ruc' && d.estado && d.estado !== 'ACTIVO' ? ` · <span style="color:var(--danger)">RUC ${esc(d.estado.toLowerCase())}</span>` : ''}`;
+    } catch (e) { if (fDoc.value.replace(/\D/g, '') === n) aviso.textContent = e.message; }
+  });
+}
 
 // Diagnóstico sencillo a partir de la medida, en palabras que entiende el paciente.
 function diagnostico(m) {
@@ -257,21 +421,23 @@ function confirmBox(msg, ok, label = 'Confirmar') {
     onMount: bg => { $('#okc', bg).onclick = () => { closeModal(); ok(); }; } });
 }
 
-// Autorización con la clave de los dos socios para cambios delicados.
+// Autorización con la clave del dueño y los socios para cambios delicados (los vendedores no autorizan).
 function dual(motivo, cb) {
-  const socios = db.config.socios;
-  if (socios.length < 2) { cb(); return; }
+  const socios = autorizantes();
+  if (socios.length < 2 && socios.some(s => s.id === user)) { cb(); return; }
   modal({
-    title: 'Autorización de los socios',
-    body: `<div class="lock-note">${icon('lock')}<div><b>${esc(motivo)}</b><br>Este cambio necesita la clave de los dos socios.</div></div>
-      <div class="form">${socios.map(s => `<label class="f">Clave de ${esc(s.nombre)}<input class="inp pin" type="password" inputmode="numeric" autocomplete="off" data-s="${s.id}" maxlength="8"></label>`).join('')}
+    title: 'Autorización',
+    body: `<div class="lock-note">${icon('lock')}<div><b>${esc(motivo)}</b><br>Este cambio necesita la clave de ${socios.length === 1 ? esc(socios[0].nombre) : socios.length === 2 ? 'los dos socios' : 'el dueño y los socios'}.</div></div>
+      <div class="form">${socios.map(s => `<div><label class="f" data-fila="${s.id}">Clave de ${esc(s.nombre)}<input class="inp pin" type="password" inputmode="numeric" autocomplete="off" data-s="${s.id}" maxlength="8"></label>${s.id === user ? '' : botonRemoto(s)}</div>`).join('')}
       <div class="err" id="derr"></div></div>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="dok">${icon('unlock')} Autorizar</button>`,
     onMount: bg => {
+      const listo = () => { closeModal(); remoto.usar(); addLog(motivo + remoto.texto(), socios.map(s => s.id)); cb(); };
+      const remoto = esperarRemoto(bg, motivo, () => { if ($$('[data-s]', bg).every(i => remoto.ok.has(i.dataset.s))) listo(); });
       const go = () => {
-        const bad = $$('[data-s]', bg).filter(i => hashPin(i.value) !== socio(i.dataset.s).pin);
+        const bad = $$('[data-s]', bg).filter(i => !remoto.ok.has(i.dataset.s) && hashPin(i.value) !== socio(i.dataset.s).pin);
         if (bad.length) { $('#derr', bg).textContent = 'Clave incorrecta de ' + bad.map(i => socioName(i.dataset.s)).join(' y '); return; }
-        closeModal(); addLog(motivo, socios.map(s => s.id)); cb();
+        listo();
       };
       $('#dok', bg).onclick = go;
       $$('input', bg).forEach(i => i.addEventListener('keydown', e => e.key === 'Enter' && go()));
@@ -289,6 +455,8 @@ function readForm(form) {
 const routes = {};
 // Navegación interna (sin depender del # de la dirección, que en la página publicada no se puede usar).
 let route = '/inicio', lastRoute = '';
+// El enlace que llega por WhatsApp para aprobar trae ?aprobar=… : se abre directo ese pedido.
+(() => { try { const q = new URLSearchParams(location.search), a = q.get('aprobar'); if (a) { route = '/aprobar/' + a; q.delete('aprobar'); history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '')); } } catch (e) { } })();
 function go(h, push = true) {
   route = String(h || '').replace(/^#/, '') || '/inicio';
   if (push) { try { history.pushState({ route }, ''); } catch (e) { } }
@@ -304,62 +472,104 @@ document.addEventListener('click', e => { if (!e.target.closest('.search')) $$('
 
 function render() {
   const root = $('#root');
-  if (!db) { root.innerHTML = setupView(); bindSetup(); return; }
-  if (!user || !me()) { ajustesAbierto = false; root.innerHTML = loginView(); bindLogin(); return; }
+  pendienteRender = false;
+  if (!window.Nube || sesion.cargando || registrando) { root.innerHTML = esperaView('Abriendo TerraÓptica…'); return; }
+  if (!sesion.usuario) { root.innerHTML = cuentaView(); bindCuenta(); return; }
+  if (!sesion.optica) { root.innerHTML = sinOpticaView(); bindSinOptica(); return; }
+  if (sesion.optica.estado === 'bloqueada') { root.innerHTML = bloqueadaView(); bindSinOptica(); return; }
+  if (!datosListos) { root.innerHTML = esperaView('Cargando los datos de tu óptica…', true); return; }
+  const esDuenoCuenta = sesion.perfil?.rol === 'dueno';
+  if (!db) { if (esDuenoCuenta && hayDatosCelular() && !estadoSubida(sesion.optica.id)) { root.innerHTML = subidaInicialView(); bindSubidaInicial(); } else if (esDuenoCuenta) { root.innerHTML = setupView(); bindSetup(); } else { root.innerHTML = avisoCuentaView('Tu óptica todavía no está lista', 'El dueño tiene que entrar primero y configurarla.'); bindAvisoCuenta(); } return; }
+  const antes = user; user = personaDeSesion();
+  if (user !== antes) ajustesAbierto = false;
+  if (!me()) { root.innerHTML = avisoCuentaView('Sin acceso', 'Tu usuario ya no tiene acceso a esta óptica. Si crees que es un error, habla con el dueño.'); bindAvisoCuenta(); return; }
+  if (socioRol(me()) !== 'vendedor' && !me().pin) { root.innerHTML = claveView(); bindClave(); return; }
   const [path, qs] = route.split('?');
   const parts = path.split('/').filter(Boolean);
   const q = new URLSearchParams(qs || '');
   const key = parts[0] || 'inicio';
-  const view = routes[key] || routes.inicio;
+  const view = (puede(key) && routes[key]) || routes.inicio;
   if (key !== 'ajustes') ajustesAbierto = false; // al salir de Ajustes se vuelve a cerrar
   root.innerHTML = shell(key, view.html(parts[1], q));
   bindShell();
   view.bind && view.bind(parts[1], q);
   if (route !== lastRoute) { window.scrollTo(0, 0); lastRoute = route; }
+  // Una vez por sesión: si este celular tiene datos de Glooptic que no se subieron, se ofrece subirlos.
+  if (!subidaOfrecida && !subiendoCelular && !estadoSubida(sesion.optica.id) && hayDatosCelular()) { subidaOfrecida = true; setTimeout(() => { if (!$('.modal-bg')) ofrecerSubida(); }, 400); }
 }
 
 function shell(key, content) {
   const nav = [
-    ['inicio', 'Inicio', 'home'], ['pacientes', 'Pacientes', 'users'], ['ordenes', 'Órdenes', 'file'],
-    ['caja', 'Caja diaria', 'cash'], ['reportes', 'Reportes', 'bars'], ['inventario', 'Inventario', 'glasses'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear'],
+    ['inicio', 'Inicio', 'home'], ['ordenes', 'Pedidos', 'board'], ['pacientes', 'Pacientes', 'users'], ['inventario', 'Inventario', 'glasses'],
+    ['caja', 'Caja del día', 'cash'], ['reportes', 'Reportes', 'bars'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear'],
   ];
   const recs = recordatoriosData().total;
-  const pend = db.ordenes.filter(o => o.estado !== 'entregado').length;
-  const badge = k => k === 'recordatorios' && recs ? `<span class="badge">${recs}</span>` : k === 'ordenes' && pend ? `<span class="badge">${pend}</span>` : '';
-  const active = k => (k === key || (k === 'pacientes' && key === 'paciente') || (k === 'ordenes' && (key === 'orden' || key === 'nueva-orden'))) ? 'on' : '';
+  const pend = db.ordenes.filter(o => o.estado !== 'entregado').length, atr = db.ordenes.filter(diasAtraso).length;
+  const badge = k => k === 'recordatorios' && recs ? `<span class="badge">${recs}</span>` : k === 'ordenes' && atr ? `<span class="badge red">${atr} ${atr === 1 ? 'atrasado' : 'atrasados'}</span>` : k === 'ordenes' && pend ? `<span class="badge">${pend}</span>` : '';
+  const [cabE, cabT] = CABECERA[key] || ['', ''];
+  const active = k => (k === key || (k === 'pacientes' && key === 'paciente') || (k === 'ordenes' && key === 'orden')) ? 'on' : '';
   const u = me();
   return `<div class="app">
     <aside class="side">
-      <div class="brand"><div class="logo"><img src="logo-mark.png" alt=""></div><div><b>${esc(db.config.nombre || 'Mi Óptica')}</b><small>Sistema de gestión</small></div></div>
-      <nav class="nav">${nav.map(([k, t, i]) => `<a href="#/${k}" class="${active(k)}">${tile(k, i)}<span>${t}</span>${badge(k)}</a>`).join('')}</nav>
-      <div class="me"><div class="avatar">${initials(u.nombre)}</div><div><b>${esc(u.nombre)}</b><small>Socio</small></div><button id="logout" title="Cambiar de usuario">${icon('logout')}</button></div>
+      <div class="brand"><div class="logo"><img src="logo-mark.png" alt=""></div><div><b>${esc(db.config.nombre || 'Mi Óptica')}</b><small>TerraÓptica</small></div></div>
+      <a class="side-sell" href="#/nueva-orden">${icon('bag')}<span>Nueva venta</span></a>
+      <nav class="nav">${nav.filter(([k]) => puede(k)).map(([k, t, i]) => `<a href="#/${k}" class="${active(k)}">${tile(k, i)}<span>${t}</span>${badge(k)}</a>`).join('')}</nav>
+      <div class="me"><div class="avatar">${initials(u.nombre)}</div><div><b>${esc(u.nombre)}</b><small>${ROLES[miRol()]}</small></div><button id="miclave" title="Cambiar mi contraseña">${icon('lock')}</button><button id="logout" title="Cerrar sesión">${icon('logout')}</button></div>
     </aside>
     <div class="main">
       <header class="top">
+        <div class="top-l"><span class="top-logo"><img src="logo-mark.png" alt=""></span><div class="top-tt"><div class="top-eb" style="--c:${TILE[key] || TILE[{ paciente: 'pacientes', orden: 'ordenes', 'nueva-orden': 'ordenes' }[key]] || TILE.inicio}">${esc(cabE)}</div><div class="top-t">${esc(cabT)}</div></div></div>
         <div class="search">${icon('search')}<input id="gsearch" placeholder="Buscar paciente, teléfono o N° de orden…" autocomplete="off"><div class="sr" id="gres" hidden></div></div>
         <div class="date cap">${flong(hoy())}</div>
+        <button class="btn ghost icon bsearch" id="bsearch" title="Buscar">${icon('search')}</button>
         <button class="btn ghost icon me-m" id="logout2" title="Salir">${icon('logout')}</button>
       </header>
-      <main class="content">${content}</main>
+      <main class="content">${avisoAprobaciones(key)}${content}</main>
     </div>
-    <nav class="mobile-bar">${[nav[0], nav[1], nav[2], nav[3], ['mas', 'Más', 'apps']].map(([k, t, i]) =>
-      `<a href="${k === 'mas' ? '#' : '#/' + k}" ${k === 'mas' ? 'id="mas"' : ''} class="${active(k)}">${tile(k, i)}<span>${t}</span>${k === 'mas' && recs ? `<span class="badge">${recs}</span>` : badge(k)}</a>`).join('')}</nav>
+    <nav class="mobile-bar">${[nav[0], nav[1], ['vender', 'Vender', 'bag'], nav[2], ['mas', 'Más', 'apps']].map(([k, t, i]) => k === 'vender'
+      ? `<a href="#/nueva-orden" class="vender ${key === 'nueva-orden' ? 'on' : ''}"><span class="fab">${icon('bag')}</span><span>${t}</span></a>`
+      : `<a href="${k === 'mas' ? '#' : '#/' + k}" ${k === 'mas' ? 'id="mas"' : ''} class="${active(k)}">${icon(i)}<span>${t}</span>${k === 'mas' && recs ? `<span class="badge">${recs}</span>` : k === 'ordenes' && (atr || pend) ? `<span class="badge ${atr ? 'red' : ''}">${atr || pend}</span>` : ''}</a>`).join('')}</nav>
   </div>`;
 }
 
+// Cada persona cambia la contraseña con la que entra (así nadie más la conoce, ni quien le creó la cuenta).
+function cambiarClaveForm() {
+  modal({
+    title: 'Cambiar mi contraseña',
+    body: `<form id="ccf" class="form"><p class="muted small" style="margin:0">Es la contraseña con la que entras a TerraÓptica. Después de cambiarla, solo tú la sabrás.</p>
+      <label class="f">Contraseña actual<input class="inp" type="password" name="actual" autocomplete="current-password" required></label>
+      <label class="f">Contraseña nueva<input class="inp" type="password" name="nueva" autocomplete="new-password" minlength="6" required placeholder="Mínimo 6 caracteres"></label>
+      <label class="f">Repite la contraseña nueva<input class="inp" type="password" name="nueva2" autocomplete="new-password" minlength="6" required></label>
+      <div class="err" id="ccerr"></div></form>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="ccf" id="ccok">${icon('lock')} Cambiar contraseña</button>`,
+    onMount: bg => {
+      $('#ccf', bg).onsubmit = async e => {
+        e.preventDefault();
+        const f = readForm(e.target), err = $('#ccerr', bg), btn = $('#ccok', bg);
+        if (f.nueva.length < 6) { err.textContent = 'La contraseña nueva debe tener al menos 6 caracteres.'; return; }
+        if (f.nueva !== f.nueva2) { err.textContent = 'Las dos contraseñas nuevas no son iguales.'; return; }
+        if (f.nueva === f.actual) { err.textContent = 'La nueva tiene que ser distinta de la actual.'; return; }
+        btn.disabled = true; err.textContent = '';
+        try { await Nube.cambiarClave(f.actual, f.nueva); closeModal(); toast('Listo: tu contraseña cambió. La próxima vez entra con la nueva.'); }
+        catch (x) { btn.disabled = false; err.textContent = x.code === 'auth/invalid-credential' || x.code === 'auth/wrong-password' ? 'La contraseña actual no es correcta.' : Nube.mensaje(x); }
+      };
+    },
+  });
+}
 function bindShell() {
-  const out = () => { try { sessionStorage.removeItem(SESSION); } catch (e) { } user = null; render(); };
-  $('#logout').onclick = out; $('#logout2').onclick = out;
-  // En tablet horizontal la barra lateral es compacta: tocar el avatar cambia de usuario.
-  $('.side .me').onclick = e => { if (innerWidth <= 1180 && !e.target.closest('#logout')) confirmBox(`¿Salir de la cuenta de ${esc(me().nombre)}?`, out, 'Cambiar de usuario'); };
+  const out = salirDeCuenta;
+  $('#logout').onclick = out; $('#logout2').onclick = out; $('#miclave').onclick = cambiarClaveForm;
   $('#mas').onclick = e => {
     e.preventDefault();
-    modal({ title: 'Más opciones', body: `<div class="card" style="box-shadow:none">${[['reportes', 'Reportes', 'bars'], ['inventario', 'Inventario', 'glasses'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear']]
-      .map(([k, t, i]) => `<a class="list-item link" href="#/${k}" data-close>${tile(k, i)}<span class="grow t">${t}</span></a>`).join('')}
-      <a class="list-item link" href="#" id="out3"><span class="tile" style="--c:#98a2b3">${icon('logout')}</span><span class="grow t">Cambiar de usuario</span></a></div>`,
-      onMount: bg => { $$('a[data-close]', bg).forEach(a => a.onclick = closeModal); $('#out3', bg).onclick = e => { e.preventDefault(); closeModal(); out(); }; } });
+    modal({ title: 'Más opciones', body: `<div class="card" style="box-shadow:none">${[['inventario', 'Inventario', 'glasses'], ['caja', 'Caja del día', 'cash'], ['reportes', 'Reportes', 'bars'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear']]
+      .filter(([k]) => puede(k)).map(([k, t, i]) => `<a class="list-item link" href="#/${k}" data-close>${tile(k, i)}<span class="grow t">${t}</span></a>`).join('')}
+      <a class="list-item link" href="#" id="clave3"><span class="tile" style="--c:#475569">${icon('lock')}</span><span class="grow t">Cambiar mi contraseña</span></a>
+      <a class="list-item link" href="#" id="out3"><span class="tile" style="--c:#98a2b3">${icon('logout')}</span><span class="grow t">Cerrar sesión</span></a></div>`,
+      onMount: bg => { $$('a[data-close]', bg).forEach(a => a.onclick = closeModal); $('#out3', bg).onclick = e => { e.preventDefault(); closeModal(); out(); }; $('#clave3', bg).onclick = e => { e.preventDefault(); cambiarClaveForm(); }; } });
   };
   const inp = $('#gsearch'), res = $('#gres');
+  $('#bsearch').onclick = () => { $('.top').classList.add('buscando'); inp.focus(); };
+  inp.addEventListener('blur', () => setTimeout(() => { if (!inp.value) $('.top')?.classList.remove('buscando'); }, 200));
   inp.addEventListener('input', () => {
     const q = inp.value.trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
     if (!q) { res.hidden = true; return; }
@@ -381,18 +591,158 @@ const estadoChip = o => {
 };
 const deudaChip = o => { const s = saldoOrden(o); return s > 0.009 ? `<span class="chip deuda">Debe ${money(s)}</span>` : `<span class="chip entr">Pagado</span>`; };
 
-// ---------- Primera configuración ----------
+// ---------- Cuenta de TerraÓptica (correo y clave) ----------
+const marcaTO = `<div class="to-brand"><img src="logo-mark.png" alt=""><span>Terra<b>Óptica</b></span></div>`;
+function esperaView(txt, red) {
+  return `<div class="login"><div class="box" style="text-align:center">${marcaTO}<div class="spin"></div><p class="muted" style="margin:14px 0 0">${esc(txt)}</p>
+    ${red ? `<p class="hint" style="margin-top:10px">La primera vez en este equipo necesitas internet.</p>` : ''}</div></div>`;
+}
+let modoCuenta = 'ingresar';
+function cuentaView() {
+  const m = REGISTRO_ABIERTO || modoCuenta !== 'registrar' ? modoCuenta : 'ingresar';
+  const tabs = !REGISTRO_ABIERTO ? '' : `<div class="seg to-tabs"><button type="button" data-mc="ingresar" class="${m === 'ingresar' ? 'on' : ''}">Ingresar</button><button type="button" data-mc="registrar" class="${m === 'registrar' ? 'on' : ''}">Crear cuenta</button></div>`;
+  let body;
+  if (m === 'registrar') body = `<p class="muted" style="margin:0 0 16px">Prueba TerraÓptica gratis por ${Nube.DIAS_PRUEBA} días. No pedimos tarjeta.</p>
+    <form id="cuenta" class="form">
+      <label class="f">Nombre de tu óptica<input class="inp" name="optica" required autocomplete="organization"></label>
+      <div class="fg"><label class="f">Tu nombre<input class="inp" name="nombre" required autocomplete="name"></label>
+      <label class="f">Celular (WhatsApp)<input class="inp" name="telefono" inputmode="tel" required autocomplete="tel"></label></div>
+      <label class="f">Correo<input class="inp" name="correo" type="email" required autocomplete="email"></label>
+      <label class="f">Crea una clave<input class="inp" name="clave" type="password" required minlength="6" autocomplete="new-password" placeholder="Mínimo 6 caracteres"></label>
+      <div class="err" id="cerr"></div><button class="btn primary" style="padding:12px">Crear mi cuenta</button></form>`;
+  else if (m === 'recuperar') body = `<p class="muted" style="margin:0 0 16px">Escribe tu usuario o el correo de tu cuenta y te enviaremos un enlace a tu correo para crear una clave nueva.</p>
+    <form id="cuenta" class="form"><label class="f">Usuario o correo<input class="inp" name="correo" required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+      <div class="err" id="cerr"></div><button class="btn primary" style="padding:12px">Enviar enlace</button>
+      <button type="button" class="btn ghost" data-mc="ingresar">Volver</button></form>`;
+  else body = `<form id="cuenta" class="form">
+      <label class="f">Usuario o correo<input class="inp" name="correo" required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+      <label class="f">Clave<input class="inp" name="clave" type="password" required autocomplete="current-password"></label>
+      <div class="err" id="cerr"></div><button class="btn primary" style="padding:12px">Ingresar</button>
+      <button type="button" class="btn ghost sm" data-mc="recuperar">Olvidé mi clave</button></form>
+      ${REGISTRO_ABIERTO ? '' : `<p class="hint" style="margin:16px 0 0;text-align:center">¿Quieres usar TerraÓptica en tu óptica? <a href="${waSoporte('Hola, quiero usar TerraÓptica en mi óptica.')}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">Escríbenos por WhatsApp</a></p>`}`;
+  return `<div class="login"><div class="box">${marcaTO}<h1 style="margin-top:4px">${m === 'registrar' ? 'Crea la cuenta de tu óptica' : m === 'recuperar' ? 'Recuperar clave' : 'Bienvenido'}</h1>
+    ${m === 'recuperar' ? '' : `<p class="muted" style="margin:6px 0 18px">El sistema para tu óptica: pacientes, ventas, caja e inventario.</p>`}
+    ${m === 'recuperar' ? '' : tabs}${body}</div></div>`;
+}
+function bindCuenta() {
+  $$('[data-mc]').forEach(b => b.onclick = () => { modoCuenta = b.dataset.mc; render(); });
+  const f = $('#cuenta'); $('input', f).focus();
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const v = readForm(f), btn = $('button.primary', f), err = $('#cerr');
+    err.textContent = ''; btn.disabled = true;
+    try {
+      if (modoCuenta === 'recuperar') {
+        await Nube.recuperar(v.correo);
+        toast('Te enviamos el enlace. Revisa tu correo (y la carpeta de spam).'); modoCuenta = 'ingresar'; render(); return;
+      }
+      if (modoCuenta === 'registrar') {
+        registrando = true; render();
+        await Nube.registrar({ correo: v.correo, clave: v.clave, nombre: v.nombre.trim(), optica: v.optica.trim(), telefono: v.telefono.trim() });
+        registrando = false; await Nube.refrescar(); return;
+      }
+      await Nube.ingresar(v.correo, v.clave);
+    } catch (x) {
+      const fue = registrando; registrando = false;
+      if (fue) { render(); $('#cerr').textContent = Nube.mensaje(x); return; }
+      err.textContent = Nube.mensaje(x); btn.disabled = false;
+    }
+  };
+}
+function sinOpticaView() {
+  // Cuenta sin óptica (por ejemplo, si el registro se cortó): puede terminar de crearla.
+  if (REGISTRO_ABIERTO && !sesion.error && !sesion.perfil) return `<div class="login"><div class="box">${marcaTO}<h1>Termina de crear tu óptica</h1>
+    <p class="muted" style="margin:6px 0 18px">Tu cuenta ${esc(sesion.usuario.email)} está lista. Solo falta tu óptica: tendrás ${Nube.DIAS_PRUEBA} días de prueba gratis.</p>
+    <form id="copt" class="form"><label class="f">Nombre de tu óptica<input class="inp" name="optica" required></label>
+      <div class="fg"><label class="f">Tu nombre<input class="inp" name="nombre" required></label><label class="f">Celular (WhatsApp)<input class="inp" name="telefono" inputmode="tel" required></label></div>
+      <div class="err" id="cerr"></div><button class="btn primary" style="padding:12px">Crear mi óptica</button>
+      <button type="button" class="btn ghost" id="csalir">Salir de la cuenta</button></form></div></div>`;
+  return `<div class="login"><div class="box">${marcaTO}<h1>No encontramos tu óptica</h1>
+    <p class="muted" style="margin:8px 0 18px">${sesion.error ? esc(sesion.error) : `La cuenta ${esc(sesion.usuario.email)} no está vinculada a ninguna óptica.`} Si crees que es un error, escríbenos.</p>
+    <div class="actions"><a class="btn primary" href="${waSoporte('Hola, no puedo entrar a mi óptica en TerraÓptica. Mi correo es ' + sesion.usuario.email)}" target="_blank" rel="noopener">Escribir por WhatsApp</a>
+    <button class="btn" id="csalir">Salir de la cuenta</button></div></div></div>`;
+}
+function bloqueadaView() {
+  return `<div class="login"><div class="box">${marcaTO}<h1>Cuenta suspendida</h1>
+    <p class="muted" style="margin:8px 0 18px">El acceso de ${esc(sesion.optica.nombre || 'tu óptica')} está suspendido. Tus datos siguen guardados y no se borra nada. Escríbenos para reactivarla.</p>
+    <div class="actions"><a class="btn primary" href="${waSoporte('Hola, quiero reactivar mi óptica ' + (sesion.optica.nombre || '') + ' en TerraÓptica.')}" target="_blank" rel="noopener">Escribir por WhatsApp</a>
+    <button class="btn" id="csalir">Salir de la cuenta</button></div></div></div>`;
+}
+function bindSinOptica() {
+  $('#csalir').onclick = () => Nube.salir();
+  const f = $('#copt'); if (!f) return;
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const v = readForm(f), btn = $('button.primary', f); btn.disabled = true;
+    try { await Nube.crearOptica(v); await Nube.refrescar(); }
+    catch (x) { $('#cerr').textContent = Nube.mensaje(x); btn.disabled = false; }
+  };
+}
+// Cierra la sesión de la cuenta en este equipo (los datos quedan en la nube).
+function salirDeCuenta() {
+  confirmBox(`¿Cerrar la sesión de <b>${esc(me()?.nombre || sesion.perfil?.usuario || sesion.usuario?.email || '')}</b> en este equipo? Los datos quedan guardados en la nube.`, async () => {
+    subir(); user = null; await Nube.salir();
+  }, 'Cerrar sesión');
+}
+// Persona de la óptica que corresponde al usuario con que se entró: el dueño, o la persona a la que el dueño le creó el usuario.
+function personaDeSesion() {
+  const p = sesion.perfil || {};
+  if (p.rol === 'dueno') return dueno()?.id || null;
+  const s = p.personaId && socio(p.personaId);
+  return s && !s.baja ? s.id : null;
+}
+function avisoCuentaView(titulo, texto) {
+  return `<div class="login"><div class="box">${marcaTO}<h1>${esc(titulo)}</h1>
+    <p class="muted" style="margin:8px 0 18px">${esc(texto)}</p>
+    <button class="btn" id="csalir">Cerrar sesión</button></div></div>`;
+}
+function bindAvisoCuenta() { $('#csalir').onclick = () => Nube.salir(); }
+// Dueño y socios necesitan una clave de números para autorizar cambios delicados: la crean la primera vez que entran.
+function claveView() {
+  return `<div class="login"><div class="box">${marcaTO}<h1>Hola, ${esc(me().nombre)}</h1>
+    <p class="muted" style="margin:8px 0 18px">Crea tu clave de autorización: son 4 a 8 números que se piden para aprobar cambios delicados, como anular una venta. No se la digas a nadie.</p>
+    <form id="fclave" class="form"><label class="f">Tu clave<input class="inp pin" name="p1" type="password" inputmode="numeric" required pattern="[0-9]{4,8}" minlength="4" maxlength="8" autocomplete="off"></label>
+      <label class="f">Repítela<input class="inp pin" name="p2" type="password" inputmode="numeric" required pattern="[0-9]{4,8}" minlength="4" maxlength="8" autocomplete="off"></label>
+      <div class="err" id="clerr"></div><button class="btn primary" style="padding:12px">Guardar clave</button>
+      <button type="button" class="btn ghost sm" id="csalir">Cerrar sesión</button></form></div></div>`;
+}
+function bindClave() {
+  $('#csalir').onclick = salirDeCuenta;
+  $('#fclave').onsubmit = e => {
+    e.preventDefault();
+    const f = readForm(e.target);
+    if (f.p1 !== f.p2) { $('#clerr').textContent = 'Las dos claves no son iguales.'; return; }
+    me().pin = hashPin(f.p1); addLog('Creó su clave de autorización'); save(); toast('Clave guardada'); render();
+  };
+}
+// Arranque: espera a que cargue la conexión y escucha la cuenta y los datos de la óptica.
+function arrancarNube() {
+  Nube.alCambiarSesion(s => {
+    const antes = sesion.optica?.id, oid = s.optica?.id;
+    sesion = s;
+    if (oid !== antes) {
+      if (quitarDatos) { quitarDatos(); quitarDatos = null; }
+      remoto = {}; sinc = {}; datosListos = false; db = null;
+      if (oid) quitarDatos = Nube.escucharDatos(oid, recibirDatos, e => toast('Problema con la nube: ' + e));
+    }
+    if (!s.usuario) user = null;
+    if (datosListos && db && user) pintarSiSeguro(); else render();
+  });
+}
+
+// ---------- Primera configuración de la óptica ----------
 function setupView() {
+  const o = sesion.optica || {}, p = sesion.perfil || {};
   return `<div class="login"><div class="box wide">
-    <div class="logo"><img src="logo-mark.png" alt=""></div>
-    <h1>Bienvenido</h1><p class="muted" style="margin:6px 0 20px">Configuremos la óptica. Solo toma un minuto.</p>
+    ${marcaTO}
+    <h1>Configuremos tu óptica</h1><p class="muted" style="margin:6px 0 20px">Solo toma un minuto. Todo se puede cambiar después en Ajustes.</p>
     <form id="setup" class="form">
-      <div class="fg"><label class="f full">Nombre de la óptica<input class="inp" name="nombre" required value="Glooptic"></label>
-      <label class="f">Teléfono<input class="inp" name="telefono" inputmode="tel"></label><label class="f">RUC <span class="hint">(opcional)</span><input class="inp" name="ruc" inputmode="numeric"></label>
+      <div class="fg"><label class="f full">Nombre de la óptica<input class="inp" name="nombre" required value="${esc(o.nombre || '')}"></label>
+      <label class="f">Teléfono<input class="inp" name="telefono" inputmode="tel" value="${esc(o.telefono || '')}"></label><label class="f">RUC<input class="inp" name="ruc" inputmode="numeric" placeholder="Opcional"></label>
       <label class="f full">Dirección<input class="inp" name="direccion"></label></div>
-      <div class="fg"><label class="f">Socio 1<input class="inp" name="s1" required value="Jorge"></label><label class="f">Clave socio 1<input class="inp" name="p1" type="password" inputmode="numeric" required minlength="4" maxlength="8" placeholder="4 a 8 dígitos"></label>
-      <label class="f">Socio 2<input class="inp" name="s2" required value="Juan"></label><label class="f">Clave socio 2<input class="inp" name="p2" type="password" inputmode="numeric" required minlength="4" maxlength="8" placeholder="4 a 8 dígitos"></label></div>
-      <label class="row small" style="gap:8px"><input type="checkbox" name="demo" checked> Cargar datos de ejemplo para probar el sistema</label>
+      <p class="hint" style="margin:0">Tu clave de autorización son 4 a 8 números que se piden para aprobar cambios delicados, como anular una venta. Después, en Ajustes → Personas, les creas usuario y contraseña a tus socios y vendedores.</p>
+      <div class="fg"><label class="f">Tu nombre (dueño)<input class="inp" name="s1" required value="${esc(p.nombre || '')}"></label><label class="f">Tu clave de autorización<input class="inp" name="p1" type="password" inputmode="numeric" required pattern="[0-9]{4,8}" minlength="4" maxlength="8" placeholder="4 a 8 números"></label></div>
+      <div class="err" id="serr"></div>
       <button class="btn primary" style="padding:12px">Empezar</button>
     </form></div></div>`;
 }
@@ -401,37 +751,269 @@ function bindSetup() {
     e.preventDefault();
     const f = readForm(e.target);
     db = blank();
-    Object.assign(db.config, { nombre: f.nombre, telefono: f.telefono, ruc: f.ruc, direccion: f.direccion });
+    Object.assign(db.config, { nombre: f.nombre.trim(), telefono: f.telefono, ruc: f.ruc, direccion: f.direccion });
     Object.assign(db.config.fact, { ruc: f.ruc, direccion: f.direccion });
-    db.config.socios = [{ id: 's1', nombre: f.s1, pin: hashPin(f.p1), pct: 50 }, { id: 's2', nombre: f.s2, pin: hashPin(f.p2), pct: 50 }];
-    if (f.demo) seedDemo();
-    save(); render(); logoInicial();
+    db.config.socios = [{ id: 's1', nombre: f.s1.trim(), pin: hashPin(f.p1), pct: 100, rol: 'dueno', usuario: sesion.perfil?.usuario || '' }];
+    db.config.duenoId = 's1';
+    user = 's1';
+    save(); render();
   };
 }
 
-// ---------- Ingreso ----------
-let loginSel = null;
-function loginView() {
-  const ss = db.config.socios;
-  loginSel = loginSel || ss[0]?.id;
-  return `<div class="login"><div class="box">
-    <div class="logo"><img src="logo-mark.png" alt=""></div>
-    <h1>${esc(db.config.nombre || 'Mi Óptica')}</h1><p class="muted" style="margin:6px 0 0">¿Quién ingresa?</p>
-    <div class="who">${ss.map(s => `<button type="button" data-u="${s.id}" class="${s.id === loginSel ? 'on' : ''}"><span class="avatar">${initials(s.nombre)}</span>${esc(s.nombre)}</button>`).join('')}</div>
-    <form id="login" class="form"><input class="inp pin" id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Clave" maxlength="8">
-    <div class="err" id="lerr"></div><button class="btn primary" style="padding:12px">Ingresar</button></form></div></div>`;
+// ---------- Pasar los datos de Glooptic (guardados en el celular) a la nube ----------
+// Glooptic guardaba todo en el navegador de cada celular. TerraÓptica se publica en la misma dirección,
+// así que puede leer esos datos y subirlos. Nunca se borran del celular.
+// Si dos celulares tenían datos (Jorge y Juan), el segundo se suma al primero sin repetir ni reemplazar nada.
+const CLAVE_GLOOPTIC = 'optica-db-v1';
+const marcaSubida = oid => 'terraoptica-subido-' + oid;
+let subidaOfrecida = false, subiendoCelular = false;
+const hashTxt = s => { let h = 5381; for (const c of String(s)) h = ((h << 5) + h + c.charCodeAt(0)) | 0; return (h >>> 0).toString(36); };
+const copia = v => JSON.parse(JSON.stringify(v));
+function datosDelCelular() {
+  try {
+    const r = localStorage.getItem(CLAVE_GLOOPTIC); if (!r) return null;
+    const d = JSON.parse(r); if (!d || !d.config || !Array.isArray(d.config.socios) || !d.config.socios.length) return null;
+    return d;
+  } catch (e) { return null; }
 }
-function bindLogin() {
-  $$('[data-u]').forEach(b => b.onclick = () => { loginSel = b.dataset.u; $$('[data-u]').forEach(x => x.classList.toggle('on', x === b)); $('#pin').focus(); });
-  $('#pin').focus();
-  $('#login').onsubmit = e => {
-    e.preventDefault();
-    const s = socio(loginSel);
-    if (!s || hashPin($('#pin').value) !== s.pin) { $('#lerr').textContent = 'Clave incorrecta'; $('#pin').value = ''; return; }
-    user = s.id; try { sessionStorage.setItem(SESSION, user); } catch (err) { }
-    render();
+function estadoSubida(oid) { try { return JSON.parse(localStorage.getItem(marcaSubida(oid)) || 'null'); } catch (e) { return null; } }
+function marcarSubida(oid, como) { try { localStorage.setItem(marcaSubida(oid), JSON.stringify({ como, ts: Date.now() })); } catch (e) { } }
+// Glooptic ofrecía datos de ejemplo al empezar. Si siguen en el celular, no se suben.
+const DEMO_PAC = ['María Fernanda Quispe|987654321', 'Carlos Mendoza Ríos|956112233', 'Lucía Paredes|912345678', 'Jorge Luis Huamán|944556677', 'Rosa Elvira Torres|933221100', 'Mateo Salazar (niño)|921987654'];
+const DEMO_MONT = ['Ray-Ban|5154|C2|380', 'Ray-Ban|3447|C1|420', 'Vogue|5286|C1|290', 'Oakley|8046|C3|450', 'Fellis|4321|C2|180', 'Genérica|||95', 'Fellis|4321|C1|180', 'Carolina Herrera|836|C2|520', 'Vanci|7788|C1|220', 'Genérica|||160'];
+const DEMO_CRIS = ['Monofocal CR-39 blanco', 'Monofocal CR-39 antirreflejo', 'Monofocal blue cut antirreflejo', 'Monofocal fotocromático', 'Bifocal flat-top antirreflejo', 'Progresivo digital antirreflejo', 'Progresivo blue cut premium', 'Policarbonato antirreflejo (niños)'];
+const DEMO_GASTO = ['Laboratorio (bisel y armado)|60', 'Almuerzo|24', 'Luz|85'];
+// Prepara los datos del celular: completa lo que falte y separa los datos de ejemplo. Devuelve { d, demo }.
+function limpiarCelular(crudo) {
+  const d = Object.assign(blank(), copia(crudo));
+  for (const col in COLS) d[col] = Array.isArray(d[col]) ? d[col] : [];
+  d.config.fact = d.config.fact || {};
+  const pacDemo = new Set(d.pacientes.filter(p => DEMO_PAC.includes(`${p.nombre}|${p.telefono}`)).map(p => p.id));
+  let demo = 0;
+  if (pacDemo.size >= 4) {
+    const ordDemo = new Set(d.ordenes.filter(o => pacDemo.has(o.pacienteId)).map(o => o.id));
+    const monDemo = new Set(d.monturas.filter(m => DEMO_MONT.includes(`${m.marca}|${m.varilla || ''}|${m.colorCod || ''}|${m.precio}`) && /^M0000\d$|^M00010$/.test(m.codigo)).map(m => m.id));
+    demo = pacDemo.size;
+    d.pacientes = d.pacientes.filter(p => !pacDemo.has(p.id));
+    d.medidas = d.medidas.filter(m => !pacDemo.has(m.pacienteId));
+    d.ordenes = d.ordenes.filter(o => !ordDemo.has(o.id));
+    d.pagos = d.pagos.filter(p => !ordDemo.has(p.ordenId));
+    d.comprobantes = d.comprobantes.filter(c => !ordDemo.has(c.ordenId));
+    // Las monturas de ejemplo solo se quitan si nadie las vendió en una venta real.
+    const vendidas = new Set(d.ordenes.flatMap(o => o.items.map(i => i.ref)));
+    d.monturas = d.monturas.filter(m => !monDemo.has(m.id) || vendidas.has(m.id));
+    d.cristales = d.cristales.filter(c => !DEMO_CRIS.includes(c.nombre) || vendidas.has(c.id));
+    d.gastos = d.gastos.filter(g => !DEMO_GASTO.includes(`${g.concepto}|${g.monto}`));
+    d.vales = d.vales.filter(v => !(v.concepto === 'Adelanto' && num(v.monto) === 50));
+    // El ejemplo también dejaba cerrada la caja del día anterior (un día antes de crear los pacientes de ejemplo).
+    const creadoDemo = Math.max(...crudo.pacientes.filter(p => pacDemo.has(p.id)).map(p => num(p.creado)));
+    d.cierres = d.cierres.filter(c => Math.abs(num(c.ts) - (creadoDemo - 864e5)) > 60000);
+  }
+  // Glooptic no les ponía código a los cierres de caja ni al historial: se les da uno fijo, para no repetirlos si se sube dos veces.
+  d.log.forEach(l => { if (!l.id) l.id = 'g' + hashTxt(l.ts + '|' + l.accion); });
+  d.cierres.forEach(c => { if (!c.id) c.id = 'c' + c.fecha; });
+  for (const col in COLS) d[col].forEach(r => { if (!r.id) r.id = 'g' + hashTxt(JSON.stringify(r)); });
+  return { d: normDb(d), demo };
+}
+const cuantos = d => ({ pacientes: d.pacientes.length, medidas: d.medidas.length, ventas: d.ordenes.length, monturas: d.monturas.length, pagos: d.pagos.length, gastos: d.gastos.length, comprobantes: d.comprobantes.length });
+const CAMPOS_REF = ['por', 'socioId', 'autoriza', 'anuladaPor', 'pacienteId', 'ref'];
+function cambiarRefs(v, mapa) {
+  if (Array.isArray(v)) return v.map(x => cambiarRefs(x, mapa));
+  if (v && typeof v === 'object') { const o = {}; for (const k in v) o[k] = CAMPOS_REF.includes(k) && typeof v[k] === 'string' && mapa[v[k]] ? mapa[v[k]] : cambiarRefs(v[k], mapa); return o; }
+  return v;
+}
+// Suma los datos del celular (src) a los de la nube (dst). No borra ni reemplaza nada de la nube.
+// Devuelve lo que pasó, para mostrarlo.
+function juntarCelular(dst, src) {
+  const R = { nuevos: { pacientes: 0, medidas: 0, ventas: 0, monturas: 0, pagos: 0, gastos: 0, comprobantes: 0, otros: 0, listas: 0 }, personas: [], renumeradas: [], codigos: [], mismosPacientes: 0, mismasMonturas: 0, boletasRepetidas: 0 };
+  const mapa = {};
+  const primera = s => sinTilde(s).trim().split(/\s+/)[0] || '';
+  // Personas: se reconocen por el primer nombre (Jorge = Jorge Ortiz). Las que no están se agregan como socios.
+  for (const s of src.config.socios) {
+    const igual = dst.config.socios.find(x => primera(x.nombre) === primera(s.nombre));
+    if (igual) { if (igual.id !== s.id) mapa[s.id] = igual.id; if (!igual.pin && s.pin) igual.pin = s.pin; continue; }
+    const id = dst.config.socios.some(x => x.id === s.id) ? uid() : s.id;
+    if (id !== s.id) mapa[s.id] = id;
+    const { usuario, uid: _u, ...resto } = s;
+    // Su porcentaje no puede pasar lo que queda libre (el resto es del dueño).
+    const libre = Math.max(0, 100 - dst.config.socios.filter(x => x.id !== dst.config.duenoId && !x.baja && x.rol !== 'vendedor').reduce((t, x) => t + num(x.pct), 0));
+    dst.config.socios.push({ ...resto, id, rol: 'socio', pct: Math.min(num(s.pct), libre) });
+    R.personas.push(s.nombre);
+  }
+  if (R.personas.length) { const d = dst.config.socios.find(x => x.id === dst.config.duenoId); if (d) d.pct = Math.max(0, round2(100 - dst.config.socios.filter(x => x !== d && !x.baja && x.rol !== 'vendedor').reduce((t, x) => t + num(x.pct), 0))); }
+  // Pacientes: el mismo DNI, o el mismo nombre con el mismo celular, es la misma persona.
+  const tel = t => String(t || '').replace(/\D/g, '').slice(-9);
+  const idsP = new Set(dst.pacientes.map(p => p.id));
+  for (const p of src.pacientes) {
+    if (idsP.has(p.id)) continue;
+    const igual = dst.pacientes.find(x => (p.dni && String(x.dni || '').trim() === String(p.dni).trim()) || (alnum(x.nombre) === alnum(p.nombre) && tel(x.telefono) && tel(x.telefono) === tel(p.telefono)));
+    if (igual) { mapa[p.id] = igual.id; R.mismosPacientes++; }
+  }
+  // Monturas: el mismo código con la misma marca, varilla y colores es la misma montura (no se suma dos veces).
+  const firma = m => [alnum(m.marca), alnum(m.varilla), alnum(m.colorCod), (m.colores || []).map(alnum).join('/'), m.clase || ''].join('|');
+  const idsM = new Set(dst.monturas.map(m => m.id));
+  let sigM = Math.max(num(dst.config.nextMontura) || 1, ...dst.monturas.map(m => +(/^M(\d+)$/.exec(m.codigo) || [0, 0])[1] + 1));
+  const nuevasM = [];
+  for (const m of src.monturas) {
+    if (idsM.has(m.id)) continue;
+    const mismoCod = dst.monturas.find(x => x.codigo === m.codigo);
+    if (mismoCod && firma(mismoCod) === firma(m)) { mapa[m.id] = mismoCod.id; R.mismasMonturas++; continue; }
+    nuevasM.push(m);
+  }
+  // Cristales: por nombre.
+  const idsC = new Set(dst.cristales.map(c => c.id));
+  for (const c of src.cristales) { if (idsC.has(c.id)) continue; const igual = dst.cristales.find(x => alnum(x.nombre) === alnum(c.nombre)); if (igual) mapa[c.id] = igual.id; }
+  // Con todo reconocido, se cambian las referencias de los registros del celular y se agregan los que faltan.
+  const s = cambiarRefs(src, mapa);
+  const agregar = (col, filtro = () => true, cuenta = 'otros') => {
+    const ids = new Set(dst[col].map(r => r.id));
+    for (const r of s[col]) if (!ids.has(r.id) && !mapa[r.id] && filtro(r)) { dst[col].push(r); ids.add(r.id); R.nuevos[cuenta]++; }
+  };
+  agregar('pacientes', () => true, 'pacientes');
+  agregar('medidas', () => true, 'medidas');
+  agregar('cristales');
+  // Monturas nuevas: si su código ya lo usa otra montura en la nube, se les da uno nuevo.
+  const codigos = new Set(dst.monturas.map(m => m.codigo));
+  for (const m0 of nuevasM) {
+    const m = s.monturas.find(x => x.id === m0.id);
+    if (!m.codigo || codigos.has(m.codigo)) { const antes = m.codigo; m.codigo = 'M' + pad(sigM++, 5); R.codigos.push({ antes, ahora: m.codigo, desc: siglaMontura(m) }); }
+    else { const n = /^M(\d+)$/.exec(m.codigo); if (n) sigM = Math.max(sigM, +n[1] + 1); }
+    codigos.add(m.codigo); dst.monturas.push(m); R.nuevos.monturas++;
+  }
+  dst.config.nextMontura = sigM;
+  // Ventas: si el número ya lo tiene otra venta en la nube, se le da el siguiente libre (y se guarda el número que tenía).
+  const nums = new Set(dst.ordenes.map(o => o.numero));
+  let sigO = Math.max(num(dst.config.nextOrden) || 1, ...dst.ordenes.map(o => num(o.numero) + 1));
+  const idsO = new Set(dst.ordenes.map(o => o.id));
+  const nuevasO = s.ordenes.filter(o => !idsO.has(o.id)).sort((a, b) => a.numero - b.numero);
+  for (const o of nuevasO) if (!nums.has(o.numero)) { nums.add(o.numero); sigO = Math.max(sigO, num(o.numero) + 1); }
+  for (const o of nuevasO) {
+    if (dst.ordenes.some(x => x.numero === o.numero)) { R.renumeradas.push({ antes: o.numero, ahora: sigO }); o.numeroAntes = o.numero; o.numero = sigO++; }
+    dst.ordenes.push(o); R.nuevos.ventas++;
+  }
+  dst.config.nextOrden = sigO;
+  agregar('pagos', () => true, 'pagos');
+  agregar('gastos', () => true, 'gastos');
+  agregar('vales');
+  agregar('anuladas');
+  // Comprobantes: se suben todos; si una boleta o factura tiene el mismo número que otra, se avisa.
+  const numsCp = new Set(dst.comprobantes.filter(c => c.numero).map(c => c.serie + '-' + c.numero));
+  for (const c of s.comprobantes) if (c.numero && numsCp.has(c.serie + '-' + c.numero) && !dst.comprobantes.some(x => x.id === c.id)) R.boletasRepetidas++;
+  agregar('comprobantes', () => true, 'comprobantes');
+  const F = dst.config.fact, G = s.config.fact || {};
+  F.numB = Math.max(num(F.numB) || 1, num(G.numB) || 1); F.numF = Math.max(num(F.numF) || 1, num(G.numF) || 1);
+  const fechas = new Set(dst.cierres.map(c => c.fecha));
+  agregar('cierres', c => !fechas.has(c.fecha));
+  agregar('log');
+  dst.log.sort((a, b) => String(b.ts).localeCompare(String(a.ts))); dst.log = dst.log.slice(0, 500);
+  // Listas de precios y accesorios: la nube manda; solo se agregan los que no estén.
+  for (const k of LISTAS) { const ids = new Set((dst[k] || []).map(x => x.id)); for (const x of s[k] || []) if (!ids.has(x.id)) { dst[k].push(x); R.nuevos.listas++; } }
+  R.total = Object.values(R.nuevos).reduce((a, b) => a + b, 0) + R.personas.length;
+  return R;
+}
+// Primera vez: la óptica en la nube todavía no tiene datos y el dueño trae los de Glooptic.
+function datosInicialesDesdeCelular(crudo) {
+  const { d, demo } = limpiarCelular(crudo);
+  const du = d.config.socios.find(x => x.id === d.config.duenoId) || d.config.socios[0];
+  d.config.duenoId = du.id;
+  d.config.socios.forEach(x => { x.rol = x === du ? 'dueno' : x.rol === 'vendedor' ? 'vendedor' : 'socio'; delete x.uid; delete x.usuario; });
+  du.usuario = sesion.perfil?.usuario || '';
+  if (!d.config.nombre) d.config.nombre = sesion.optica?.nombre || '';
+  return { d, demo };
+}
+const listaCuantos = c => [[c.pacientes, 'paciente', 'pacientes'], [c.medidas, 'medida', 'medidas'], [c.ventas, 'venta', 'ventas'], [c.monturas, 'montura', 'monturas'], [c.pagos, 'pago', 'pagos'], [c.gastos, 'gasto', 'gastos'], [c.comprobantes, 'comprobante', 'comprobantes'], [c.listas, 'precio o accesorio', 'precios y accesorios'], [c.otros, 'otro registro', 'otros registros']]
+  .filter(([n]) => n).map(([n, a, b]) => `<div class="line"><span>${n === 1 ? a[0].toUpperCase() + a.slice(1) : b[0].toUpperCase() + b.slice(1)}</span><b>${n}</b></div>`).join('') || `<div class="line"><span>Sin registros (solo la configuración)</span><b>—</b></div>`;
+function descargarCopiaCelular() {
+  const r = localStorage.getItem(CLAVE_GLOOPTIC);
+  if (r) saveFile(`copia-celular-glooptic-${hoy()}.json`, r);
+}
+// Pantalla para el dueño cuando su óptica en la nube está vacía y en este celular hay datos de Glooptic.
+function subidaInicialView() {
+  const { d, demo } = datosInicialesDesdeCelular(datosDelCelular());
+  return `<div class="login"><div class="box wide">${marcaTO}
+    <h1>Encontramos tus datos en este celular</h1>
+    <p class="muted" style="margin:6px 0 16px">Son los datos que tenías en Glooptic${d.config.nombre && !/glooptic/i.test(d.config.nombre) ? ` (<b>${esc(d.config.nombre)}</b>)` : ''}. Los subimos a la nube para que los veas desde cualquier equipo. No tienes que volver a escribir nada.</p>
+    <div class="cash-sum">${listaCuantos(cuantos(d))}<div class="line"><span>Personas</span><b>${esc(d.config.socios.map(x => x.nombre).join(', '))}</b></div></div>
+    ${demo ? `<p class="hint">También estaban los ${demo} pacientes de ejemplo que trae el sistema. Esos no se suben.</p>` : ''}
+    <p class="hint">Los datos no se borran de este celular.</p>
+    <div class="err" id="suerr"></div>
+    <div class="actions" style="margin-top:14px"><button class="btn primary" id="susubir" style="padding:12px">${icon('up')} Subir mis datos a la nube</button></div>
+    <div class="actions" style="margin-top:6px"><button class="btn ghost sm" id="sucopia">${icon('down')} Guardar una copia en el celular</button><button class="btn ghost sm" id="sunada">Empezar sin estos datos</button></div>
+  </div></div>`;
+}
+function bindSubidaInicial() {
+  $('#sucopia').onclick = descargarCopiaCelular;
+  $('#sunada').onclick = () => confirmBox('¿Empezar con la óptica vacía? Los datos de Glooptic se quedan en este celular y los puedes subir después desde Ajustes.', () => { marcarSubida(sesion.optica.id, 'no'); render(); }, 'Empezar vacía');
+  $('#susubir').onclick = async () => {
+    const btn = $('#susubir'); btn.disabled = true; btn.textContent = 'Subiendo tus datos…';
+    const { d } = datosInicialesDesdeCelular(datosDelCelular());
+    db = d; user = d.config.duenoId;
+    addLog('Datos de Glooptic subidos desde este celular');
+    const R = { total: 1, nuevos: cuantos(d), personas: [], renumeradas: [], codigos: [], mismosPacientes: 0, mismasMonturas: 0, boletasRepetidas: 0 };
+    await terminarSubida(R, true);
   };
 }
+// Sube lo que se juntó y espera a que la nube lo reciba.
+async function terminarSubida(R, inicial) {
+  subiendoCelular = true;
+  const envio = subir();
+  const r = await Promise.race([envio, new Promise(ok => setTimeout(() => ok('lento'), 25000))]);
+  subiendoCelular = false;
+  if (r === true || r === 'lento') marcarSubida(sesion.optica.id, 'si');
+  render();
+  if (r === undefined || r === false) { restaurarDesdeNube(); return alert('No se pudieron subir los datos. Los datos siguen en este celular: vuelve a intentarlo con internet o escríbenos por WhatsApp.'); }
+  resultadoSubidaModal(R, inicial, r === 'lento');
+  if (r === 'lento') envio.then(ok => ok && toast('Listo: tus datos ya están en la nube'));
+}
+function resultadoSubidaModal(R, inicial, lento) {
+  const n = R.nuevos;
+  const filas = n.pacientes + n.ventas + n.monturas + n.pagos + n.gastos + n.comprobantes + (n.medidas || 0) + (n.otros || 0) + (n.listas || 0) ? listaCuantos(n) : '';
+  const avisos = [
+    R.personas.length && `Se ${R.personas.length === 1 ? 'agregó a ' + esc(R.personas[0]) + ' como socio' : 'agregaron ' + esc(R.personas.join(' y ')) + ' como socios'}. Revisa los porcentajes y créales su usuario en Ajustes → Personas.`,
+    R.mismosPacientes && `${R.mismosPacientes} ${R.mismosPacientes === 1 ? 'paciente ya estaba' : 'pacientes ya estaban'} (mismo DNI o mismo nombre y celular): sus medidas y ventas se juntaron con el que ya había.`,
+    R.mismasMonturas && `${R.mismasMonturas} ${R.mismasMonturas === 1 ? 'montura ya estaba registrada' : 'monturas ya estaban registradas'} con el mismo código: no se sumaron dos veces.`,
+    R.renumeradas.length && `${R.renumeradas.length} ${R.renumeradas.length === 1 ? 'venta tenía un número que ya existía y ahora es' : 'ventas tenían números que ya existían y cambiaron'}: ${R.renumeradas.slice(0, 8).map(x => `N° ${pad(x.antes)} → ${pad(x.ahora)}`).join(', ')}${R.renumeradas.length > 8 ? '…' : ''}.`,
+    R.codigos.length && `${R.codigos.length} ${R.codigos.length === 1 ? 'montura tenía un código que ya usaba otra y ahora es' : 'monturas tenían códigos que ya usaban otras y cambiaron'}: ${R.codigos.slice(0, 8).map(x => `${esc(x.antes || 'sin código')} → ${x.ahora} (${esc(x.desc)})`).join(', ')}${R.codigos.length > 8 ? '…' : ''}. Cambia la etiqueta de esas monturas.`,
+    R.boletasRepetidas && `${R.boletasRepetidas} ${R.boletasRepetidas === 1 ? 'boleta o factura tiene' : 'boletas o facturas tienen'} el mismo número que otra. Revísalas en Órdenes.`,
+  ].filter(Boolean);
+  if (avisos.length) addLog('Datos de Glooptic de otro celular: ' + avisos.map(a => a.replace(/<[^>]+>/g, '')).join(' ')), save();
+  modal({
+    title: 'Tus datos ya están en la nube',
+    body: `<p style="margin:0 0 12px">${inicial ? 'Se subió todo lo que tenías en este celular.' : 'Se sumó lo que tenía este celular a lo que ya estaba en la nube.'}</p>
+      ${filas ? `<div class="cash-sum">${filas}</div>` : ''}
+      ${avisos.map(a => `<p class="hint" style="margin:10px 0 0">${a}</p>`).join('')}
+      ${lento ? `<p class="hint" style="margin:10px 0 0">El internet está lento: termina de subirse solo. No cierres la app por un rato.</p>` : ''}
+      <p class="hint" style="margin:10px 0 0">Los datos de Glooptic siguen guardados en este celular.</p>`,
+    foot: `<button class="btn primary" data-close>Listo</button>`,
+  });
+}
+// Ya hay datos en la nube: se ofrece sumar lo que tenga este celular (por ejemplo, el celular del socio).
+function ofrecerSubida(desdeAjustes) {
+  const crudo = datosDelCelular(); if (!crudo || soloLectura() || miRol() === 'vendedor') return;
+  const { d, demo } = limpiarCelular(crudo);
+  const R = juntarCelular(copia(db), copia(d));
+  if (!R.total) { marcarSubida(sesion.optica.id, 'si'); if (desdeAjustes) toast('Todo lo de este celular ya está en la nube'); return; }
+  const n = R.nuevos;
+  modal({
+    title: 'Hay datos de Glooptic en este celular',
+    body: `<p style="margin:0 0 12px">Este celular tiene datos de Glooptic que todavía no están en la nube. Se suman a lo que ya hay: no se borra ni se reemplaza nada.</p>
+      <div class="cash-sum">${listaCuantos(n)}${R.personas.length ? `<div class="line"><span>Personas nuevas</span><b>${esc(R.personas.join(', '))}</b></div>` : ''}</div>
+      ${demo ? `<p class="hint">Los ${demo} pacientes de ejemplo no se suben.</p>` : ''}
+      <p class="hint">Si una venta o una montura tiene un número que ya existe, se le da uno nuevo y te avisamos cuáles.</p>`,
+    foot: `<button class="btn ghost" id="sumas" style="margin-right:auto">Más tarde</button><button class="btn" id="sucopia">${icon('down')} Copia</button><button class="btn primary" id="susumar">${icon('up')} Subir</button>`,
+    onMount: bg => {
+      $('#sumas', bg).onclick = closeModal;
+      $('#sucopia', bg).onclick = descargarCopiaCelular;
+      $('#susumar', bg).onclick = async () => {
+        const btn = $('#susumar', bg); btn.disabled = true; btn.textContent = 'Subiendo…';
+        const R2 = juntarCelular(db, limpiarCelular(datosDelCelular()).d);
+        addLog('Datos de Glooptic sumados desde este celular');
+        closeModal(); await terminarSubida(R2, false);
+      };
+    },
+  });
+}
+const hayDatosCelular = () => !!datosDelCelular();
 
 // ---------- Inicio ----------
 routes.inicio = {
@@ -441,37 +1023,50 @@ routes.inicio = {
     const pagosHoy = db.pagos.filter(p => p.fecha === d);
     const cobrado = pagosHoy.reduce((s, p) => s + num(p.monto), 0);
     const gastos = db.gastos.filter(g => g.fecha === d).reduce((s, g) => s + num(g.monto), 0);
-    const porCobrar = db.ordenes.reduce((s, o) => s + Math.max(0, saldoOrden(o)), 0);
-    const pend = db.ordenes.filter(o => o.estado !== 'entregado').sort((a, b) => (a.entrega || '9').localeCompare(b.entrega || '9'));
+    const conSaldo = db.ordenes.filter(o => saldoOrden(o) > 0.009), porCobrar = conSaldo.reduce((s, o) => s + saldoOrden(o), 0);
+    const pend = db.ordenes.filter(o => o.estado !== 'entregado').sort((a, b) => diasAtraso(b) - diasAtraso(a) || (a.entrega || '9').localeCompare(b.entrega || '9'));
+    const lab = pend.filter(o => o.estado === 'pendiente'), atr = lab.filter(diasAtraso);
+    const listos = pend.filter(o => o.estado === 'listo'), sinAvisar = listos.filter(o => !o.avisado);
     const rec = recordatoriosData();
     const h = new Date().getHours();
     const saludo = h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches';
-    return `<div class="page-head"><div><h1>${saludo}, ${esc(me().nombre)}</h1><p>Así va la óptica hoy · <a class="lnk" href="#/reportes">Ver reportes</a></p></div>
-      <div class="actions"><a class="btn" href="#/pacientes?nuevo=1">${icon('users')} Nuevo paciente</a><a class="btn primary" href="#/nueva-orden">${icon('plus')} Nueva venta</a></div></div>
-      ${avisoRespaldo()}
-      <div class="grid g4">
-        <div class="card kpi"><div class="l"><i>${icon('trend')}</i>Vendido hoy</div><div class="v num">${money(ventasHoy.reduce((s, o) => s + totalOrden(o), 0))}</div><div class="s">${ventasHoy.length} ${ventasHoy.length === 1 ? 'orden' : 'órdenes'}</div></div>
-        <div class="card kpi ink"><div class="l"><i>${icon('wallet')}</i>Cobrado hoy</div><div class="v num">${money(cobrado)}</div><div class="s">Gastos: ${money(gastos)}</div></div>
-        <div class="card kpi warn"><div class="l"><i>${icon('clock')}</i>Por cobrar</div><div class="v num">${money(porCobrar)}</div><div class="s">Saldos de todas las órdenes</div></div>
-        <div class="card kpi gold"><div class="l"><i>${icon('file')}</i>Por entregar</div><div class="v num">${pend.length}</div><div class="s">${(n => n === 1 ? '1 lista' : n + ' listas')(pend.filter(o => o.estado === 'listo').length)} para entregar</div></div>
+    const alertas = [
+      atr.length && ['#be123c', '#ffedf1', 'clock', `${atr.length} ${atr.length === 1 ? 'pedido atrasado' : 'pedidos atrasados'} en laboratorio`, atr.slice(0, 3).map(o => `${esc(paciente(o.pacienteId)?.nombre.split(' ')[0] || '')} (${diasAtraso(o)} ${diasAtraso(o) === 1 ? 'día' : 'días'})`).join(', ') + '. Llama al laboratorio.', '#/ordenes', 'Ver pedidos'],
+      sinAvisar.length && ['#0e7490', '#e4f8fb', 'wa', `${sinAvisar.length} ${sinAvisar.length === 1 ? 'pedido listo' : 'pedidos listos'} sin avisar`, 'Mándales un WhatsApp para que vengan a recoger.', '#/recordatorios', 'Avisar'],
+      rec.deudas.length && ['#a35607', '#fff4de', 'wallet', `${rec.deudas.length} ${rec.deudas.length === 1 ? 'cliente debe' : 'clientes deben'} saldo`, 'Ya se llevaron sus lentes y todavía deben.', '#/recordatorios', 'Ver'],
+      rec.control.length && ['#4f46e5', '#eeeeff', 'eye', `${rec.control.length} ${rec.control.length === 1 ? 'paciente toca' : 'pacientes tocan'} control`, `Pasaron más de ${db.config.recordatorioMeses} meses desde su último examen.`, '#/recordatorios', 'Ver'],
+    ].filter(Boolean);
+    return `${avisoSuscripcion()}
+      <section class="hero">
+        <div><div class="hero-eb cap">${flong(d)} · ${esc(db.config.nombre || 'Mi óptica')}</div>
+          <h1 class="hero-h">${saludo}, ${esc(me().nombre)}</h1>
+          <p class="hero-p">Hoy: <b>${money(cobrado)}</b> cobrados${puede('reportes') ? `, <b>${money(porCobrar)}</b> por cobrar` : ''} y <b>${listos.length} ${listos.length === 1 ? 'pedido listo' : 'pedidos listos'}</b> para entregar.</p>
+          <div class="hero-act"><a class="btn hero-w" href="#/nueva-orden">${icon('bag')} Nueva venta</a>${sinAvisar.length ? `<a class="btn hero-g" href="#/recordatorios">${icon('wa')} Avisar a ${sinAvisar.length === 1 ? '1 cliente' : 'los ' + sinAvisar.length}</a>` : `<a class="btn hero-g" href="#/pacientes?nuevo=1">${icon('users')} Nuevo paciente</a>`}</div></div>
+        <div class="hero-side"><div class="hs"><span>En laboratorio</span><b class="num">${lab.length}</b>${atr.length ? `<em>${atr.length} atrasado${atr.length === 1 ? '' : 's'}</em>` : ''}</div><div class="hs"><span>Listos para recoger</span><b class="num">${listos.length}</b></div></div>
+      </section>
+      <div class="grid g4 mt">
+        <div class="card kpi" style="--c:#1e4fea"><div class="l"><i>${icon('trend')}</i>Vendido hoy</div><div class="v num">${money(ventasHoy.reduce((s, o) => s + totalOrden(o), 0))}</div><div class="s">${ventasHoy.length} ${ventasHoy.length === 1 ? 'venta' : 'ventas'}</div></div>
+        <div class="card kpi" style="--c:#059669"><div class="l"><i>${icon('wallet')}</i>Cobrado hoy</div><div class="v num">${money(cobrado)}</div><div class="s">${puede('gastos') ? `Gastos: ${money(gastos)}` : `${pagosHoy.length} ${pagosHoy.length === 1 ? 'cobro' : 'cobros'}`}</div></div>
+        <div class="card kpi" style="--c:#f59e0b"><div class="l"><i>${icon('clock')}</i>Por cobrar</div><div class="v num">${money(porCobrar)}</div><div class="s">${conSaldo.length} ${conSaldo.length === 1 ? 'pedido' : 'pedidos'} con saldo</div></div>
+        <div class="card kpi" style="--c:#7c3aed"><div class="l"><i>${icon('board')}</i>En laboratorio</div><div class="v num">${lab.length} ${lab.length === 1 ? 'pedido' : 'pedidos'}</div><div class="s" style="${atr.length ? 'color:var(--danger);font-weight:600' : ''}">${atr.length ? `${atr.length} atrasado${atr.length === 1 ? '' : 's'}` : 'Ninguno atrasado'}</div></div>
       </div>
       <div class="split mt">
-        <div class="card"><div class="card-h"><h3>Órdenes pendientes</h3><a class="btn sm ghost" href="#/ordenes">Ver todas</a></div>
-          <div class="card-b" style="padding:10px 0 6px">${pend.length ? pend.slice(0, 7).map(ordenRow).join('') : `<div class="empty">No hay órdenes pendientes.</div>`}</div></div>
         <div class="grid" style="gap:18px">
-          <div class="card"><div class="card-h"><h3>Caja de hoy</h3><a class="btn sm ghost" href="#/caja">Abrir caja</a></div>
+          ${listos.length ? `<div class="card"><div class="card-h"><div class="ttl"><span class="tic" style="--c:#0e7490">${icon('wa')}</span><h3>Listos para avisar</h3></div><a class="btn sm ghost" href="#/ordenes">Ver tablero</a></div>
+            <div class="card-b" style="padding:10px 0 6px">${listos.slice(0, 6).map(o => { const pc = paciente(o.pacienteId), s = saldoOrden(o); return `<div class="list-item"><span class="ini">${initials(pc?.nombre)}</span><a class="grow" href="#/orden/${o.id}"><span class="t">${esc(pc?.nombre || '')}</span><span class="d">Pedido ${pad(o.numero)}${o.listoDesde ? ' · listo desde ' + fdate(o.listoDesde, { day: 'numeric', month: 'short' }) : ''}</span></a>${s > 0.009 ? `<span class="chip pend num">Debe ${money(s)}</span>` : `<span class="chip entr">Pagado</span>`}${pc?.telefono ? `<a class="btn sm wa" target="_blank" rel="noopener" data-avisar="${o.id}" href="${waLink(pc.telefono, ordenWaTexto(o, pc))}">${icon('wa')} ${o.avisado ? 'Otra vez' : 'Avisar'}</a>` : ''}</div>`; }).join('')}</div></div>` : ''}
+          <div class="card"><div class="card-h"><div class="ttl"><span class="tic" style="--c:#7c3aed">${icon('board')}</span><h3>Pedidos pendientes</h3></div><a class="btn sm ghost" href="#/ordenes">Ver todos</a></div>
+            <div class="card-b" style="padding:10px 0 6px">${pend.length ? pend.slice(0, 7).map(ordenRow).join('') : `<div class="empty">No hay pedidos pendientes.</div>`}</div></div>
+        </div>
+        <div class="grid" style="gap:18px">
+          <div class="card"><div class="card-h"><div class="ttl"><span class="tic" style="--c:#e11d48">${icon('bell')}</span><h3>Alertas</h3></div>${alertas.length ? `<span class="badge-n">${alertas.length}</span>` : ''}</div>
+            <div class="card-b" style="display:grid;gap:10px">${alertas.length ? alertas.map(([c, bg, i, t, dsc, href, bt]) => `<div class="alerta" style="--a:${c};--a50:${bg}"><span class="aic">${icon(i)}</span><div class="grow"><b>${t}</b><p>${dsc}</p><a class="btn sm" href="${href}">${bt}</a></div></div>`).join('') : `<div class="empty" style="padding:14px">${icon('check')}<div>Todo en orden por ahora.</div></div>`}</div></div>
+          <div class="card"><div class="card-h"><div class="ttl"><span class="tic" style="--c:#059669">${icon('cash')}</span><h3>Caja de hoy</h3></div><a class="btn sm ghost" href="#/caja">Abrir caja</a></div>
             <div class="card-b">${metodoResumen(pagosHoy)}</div></div>
-          <div class="card"><div class="card-h"><h3>Recordatorios</h3><a class="btn sm ghost" href="#/recordatorios">Ver</a></div>
-            <div class="card-b"><div class="cash-sum">
-              <div class="line"><span>Lentes listos sin avisar</span><b>${rec.listos.length}</b></div>
-              <div class="line"><span>Control anual pendiente</span><b>${rec.control.length}</b></div>
-              <div class="line"><span>Clientes con saldo</span><b>${rec.deudas.length}</b></div></div></div></div>
         </div>
       </div>`;
   },
   bind() {
-    $('#resp-env') && ($('#resp-env').onclick = enviarRespaldo);
-    $('#resp-desc') && ($('#resp-desc').onclick = descargarRespaldo);
+    $$('[data-avisar]').forEach(a => a.addEventListener('click', () => { const o = orden(a.dataset.avisar); if (o) { o.avisado = hoy(); save(); } }));
   },
 };
 function ordenRow(o) {
@@ -522,14 +1117,15 @@ function pacienteForm(p) {
   modal({
     title: p ? 'Editar paciente' : 'Nuevo paciente',
     body: `<form id="pform" class="form"><div class="fg">
-      <label class="f full">Nombre completo<input class="inp" name="nombre" required value="${esc(e.nombre)}"></label>
+      <label class="f">DNI<input class="inp" name="dni" inputmode="numeric" maxlength="12" value="${esc(e.dni)}" placeholder="Con el DNI se llena el nombre"></label>
       <label class="f">Celular<input class="inp" name="telefono" inputmode="tel" value="${esc(e.telefono)}" placeholder="9XX XXX XXX"></label>
-      <label class="f">DNI<input class="inp" name="dni" inputmode="numeric" value="${esc(e.dni)}"></label>
+      <label class="f full">Nombre completo<input class="inp" name="nombre" required value="${esc(e.nombre)}"></label>
       <label class="f">Fecha de nacimiento<input class="inp" type="date" name="nacimiento" value="${esc(e.nacimiento)}"></label>
       <label class="f">Ocupación<input class="inp" name="ocupacion" value="${esc(e.ocupacion)}"></label>
       <label class="f full">Notas<textarea class="inp" name="notas">${esc(e.notas)}</textarea></label></div></form>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="pform">Guardar</button>`,
     onMount: bg => {
+      enlazarDoc($('[name=dni]', bg), $('[name=nombre]', bg));
       $('#pform', bg).onsubmit = ev => {
         ev.preventDefault();
         const f = readForm(ev.target);
@@ -547,31 +1143,114 @@ function pacienteForm(p) {
   });
 }
 
+// Ficha del paciente: datos + historial de medidas a la izquierda; la medida elegida (ojos con el eje,
+// comparación con la anterior) y la evolución de la vista a la derecha.
+const medSel = {};
+const proximoControl = m => m ? addDays(m.fecha, Math.round(num(db.config.recordatorioMeses || 12) * 30.4)) : '';
+const rxCorto = e => `${rx2(e.esf)}${num(e.cil) ? ' ' + rx2(e.cil) : ''}`;
+function ojoSVG(e, k) {
+  const cx = 110, cy = 96, R = 76, cil = num(e.cil), eje = num(e.eje);
+  let t = '';
+  for (let a = 0; a <= 180; a += 15) { const r1 = a % 45 ? R - 6 : R - 11, ra = a * Math.PI / 180; t += `<line x1="${cx + r1 * Math.cos(ra)}" y1="${cy - r1 * Math.sin(ra)}" x2="${cx + R * Math.cos(ra)}" y2="${cy - R * Math.sin(ra)}"/>`; }
+  const lab = [0, 45, 90, 135, 180].map(a => { const ra = a * Math.PI / 180; return `<text x="${cx + (R + 12) * Math.cos(ra)}" y="${cy - (R + 12) * Math.sin(ra) + 4}" text-anchor="middle">${a}</text>`; }).join('');
+  let ax = '';
+  if (cil && e.eje !== '' && e.eje != null) {
+    const ra = eje * Math.PI / 180, dx = Math.cos(ra) * (R - 2), dy = Math.sin(ra) * (R - 2);
+    ax = `<line x1="${cx + dx}" y1="${cy - dy}" x2="${cx - dx}" y2="${cy + dy}" stroke="#f79009" stroke-width="3.5" stroke-linecap="round"/><circle cx="${cx + dx}" cy="${cy - dy}" r="5" fill="#f79009"/><circle cx="${cx - dx}" cy="${cy + dy}" r="5" fill="#f79009"/>`;
+  }
+  return `<svg viewBox="0 0 220 186" role="img" aria-label="${cil ? 'Eje del cilindro ' + Math.round(eje) + ' grados' : 'Sin astigmatismo'}"><defs><radialGradient id="pfir${k}" cx="45%" cy="40%" r="60%"><stop offset="0" stop-color="#9bd8e6"/><stop offset=".55" stop-color="#2a7f9e"/><stop offset="1" stop-color="#0f3f5c"/></radialGradient></defs>
+    <path d="M${cx - R} ${cy}A${R} ${R} 0 0 1 ${cx + R} ${cy}" fill="none" stroke="#e4e7ec" stroke-width="1.5"/>
+    <g stroke="#b9c2d0" stroke-width="1.4">${t}</g><g font-size="11" font-weight="600" fill="#667085">${lab}</g>
+    <path d="M${cx - 62} ${cy}Q${cx} ${cy - 50} ${cx + 62} ${cy}Q${cx} ${cy + 50} ${cx - 62} ${cy}Z" fill="#fff" stroke="#d0d5dd" stroke-width="2"/>
+    <circle cx="${cx}" cy="${cy}" r="24" fill="url(#pfir${k})"/><circle cx="${cx}" cy="${cy}" r="9.5" fill="#101828"/><circle cx="${cx - 7}" cy="${cy - 8}" r="4" fill="#fff" opacity=".85"/>${ax}</svg>`;
+}
+// Compara la graduación con la medida anterior: "subió" = más medida (en valor absoluto).
+function cambioRx(a, b) {
+  if (a === '' || a == null || b === '' || b == null) return '';
+  const d = Math.abs(num(a)) - Math.abs(num(b));
+  if (Math.abs(d) < 0.01) return `<span class="pf-dl eq">igual</span>`;
+  return d > 0 ? `<span class="pf-dl up">▲ subió ${d.toFixed(2)}</span>` : `<span class="pf-dl dn">▼ bajó ${Math.abs(d).toFixed(2)}</span>`;
+}
+function evolucionSVG(ms) {
+  const pts = ms.slice().reverse(), W = 560, H = 200, pl = 46, pr = 18, pt = 18, pb = 30;
+  const vals = pts.flatMap(m => [num(m.od.esf), num(m.oi.esf)]);
+  let mn = Math.floor(Math.min(...vals, 0) * 2) / 2 - 0.25, mx = Math.ceil(Math.max(...vals, 0) * 2) / 2 + 0.25;
+  if (mx <= 0) mx = 0.25;
+  const paso = mx - mn > 6 ? 1 : 0.5;
+  const x = i => pl + (pts.length === 1 ? (W - pl - pr) / 2 : i * (W - pl - pr) / (pts.length - 1)), y = v => pt + (mx - v) / (mx - mn) * (H - pt - pb);
+  let g = '';
+  for (let v = Math.ceil(mn / paso) * paso; v <= mx; v += paso) g += `<line x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}" stroke="${Math.abs(v) < 0.001 ? '#b9c2d0' : '#f2f4f7'}"/><text x="${pl - 8}" y="${y(v) + 4}" text-anchor="end">${rxv(v)}</text>`;
+  const linea = (k, c) => `<path d="${pts.map((m, i) => (i ? 'L' : 'M') + x(i) + ' ' + y(num(m[k].esf))).join('')}" fill="none" stroke="${c}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`
+    + pts.map((m, i) => `<circle cx="${x(i)}" cy="${y(num(m[k].esf))}" r="${i === pts.length - 1 ? 6 : 4.5}" fill="#fff" stroke="${c}" stroke-width="3"><title>${k.toUpperCase()} ${fdate(m.fecha)}: ${rx2(m[k].esf)}</title></circle>`).join('');
+  const cada = Math.ceil(pts.length / 7);
+  return `<div class="pf-evo"><svg viewBox="0 0 ${W} ${H}" font-size="12" font-weight="500" fill="#667085">${g}${linea('od', '#0891b2')}${linea('oi', '#c026d3')}
+    ${pts.map((m, i) => (i % cada === 0 || i === pts.length - 1) ? `<text x="${x(i)}" y="${H - 8}" text-anchor="middle">${fdate(m.fecha, { month: 'short', year: 'numeric' })}</text>` : '').join('')}</svg></div>`;
+}
 routes.paciente = {
   html(id) {
     const p = paciente(id);
     if (!p) return `<div class="empty">Paciente no encontrado. <a href="#/pacientes" class="strong">Volver</a></div>`;
     const ms = medidasDe(id), os = ordenesDe(id);
     const edad = p.nacimiento ? Math.floor(daysBetween(p.nacimiento, hoy()) / 365.25) : null;
+    const i = Math.max(0, ms.findIndex(m => m.id === medSel[id])), m = ms[i], prev = ms[i + 1];
+    const ult = ms[0], prox = proximoControl(ult), vencido = prox && prox < hoy();
+    const kv = [['DNI', p.dni], ['Celular', p.telefono], ['Nacimiento', p.nacimiento && fdate(p.nacimiento)], ['Último control', ult && fdate(ult.fecha)],
+      ['Próximo control', prox && `<span style="color:${vencido ? 'var(--danger)' : '#0891b2'}">${fdate(prox)}${vencido ? ' · ya toca' : ''}</span>`]].filter(x => x[1]);
+    const fila = (k, e, pe) => `<div class="pf-e">${k}</div><div><b>${rx2(e.esf)}</b>${pe ? cambioRx(e.esf, pe.esf) : ''}</div><div><b>${rx2(e.cil)}</b>${pe ? cambioRx(e.cil, pe.cil) : ''}</div>
+      <div><b>${num(e.cil) && e.eje !== '' ? rx2(e.eje, 0) + '°' : '—'}</b></div><div><b>${rx2(e.add)}</b></div><div><b>${esc(e.av || '—')}</b></div>`;
+    const dx = m ? diagnostico(m) : [];
+    const detalle = m ? `<div class="card pf-pad pf-det">
+        <div class="row between wrap" style="align-items:flex-start;gap:10px"><div><div class="pf-eb">Medida del ${fdate(m.fecha, { day: 'numeric', month: 'long', year: 'numeric' })}</div>
+          <h3 class="pf-h">${esc(m.lente || 'Examen visual')}${m.dip ? ` · DIP ${esc(m.dip)} mm` : ''}${m.altura ? ` · Altura ${esc(m.altura)} mm` : ''}</h3></div>
+          ${prev ? `<span class="chip plain">Comparado con el ${fdate(prev.fecha)}</span>` : i === 0 ? `<span class="chip listo">Primera medida</span>` : ''}</div>
+        <div class="pf-eyes">
+          <div class="pf-eye"><h4>OD · Ojo derecho</h4>${ojoSVG(m.od, 'd')}<div class="pf-ev">${num(m.od.cil) && m.od.eje !== '' ? `Eje del cilindro <b>${rx2(m.od.eje, 0)}°</b>` : 'Sin astigmatismo'}</div></div>
+          <div class="pf-eye"><h4>OI · Ojo izquierdo</h4>${ojoSVG(m.oi, 'i')}<div class="pf-ev">${num(m.oi.cil) && m.oi.eje !== '' ? `Eje del cilindro <b>${rx2(m.oi.eje, 0)}°</b>` : 'Sin astigmatismo'}</div></div>
+        </div>
+        <div class="pf-xs"><div class="pf-grid"><div class="pf-fh"></div><div class="pf-fh">Esfera</div><div class="pf-fh">Cilindro</div><div class="pf-fh">Eje</div><div class="pf-fh">Adición</div><div class="pf-fh">AV</div>${fila('OD', m.od, prev?.od)}${fila('OI', m.oi, prev?.oi)}</div></div>
+        <div class="pf-ley">${prev ? `<span class="pf-dl up">▲ subió</span> la medida aumentó · <span class="pf-dl dn">▼ bajó</span> la medida disminuyó · ` : ''}Examinó ${esc(socioName(m.por))}</div>
+        ${dx.length ? `<div class="dx">${dx.map(d => `<span class="tag" title="${esc(d[1])}">${d[0]}</span>`).join('')}</div>` : ''}
+        ${m.filtros ? `<div class="small mt-s"><span class="muted">Filtros:</span> ${esc(m.filtros)}</div>` : ''}
+        ${m.obs ? `<div class="pf-note">${icon('edit')}<span>${esc(m.obs)}</span></div>` : ''}
+        <div class="pf-acts"><button class="btn sm" data-medit="${m.id}">${icon('edit')} Corregir</button><button class="btn sm" data-mimg="${m.id}">${icon('img')} Imagen</button>${p.telefono ? `<a class="btn sm wa" target="_blank" rel="noopener" href="${waLink(p.telefono, medidaTexto(m, p))}">${icon('wa')} Enviar al paciente</a>` : ''}</div>
+      </div>`
+      : `<div class="card pf-pad pf-det"><div class="empty">${icon('eye')}<div>Aún no tiene medidas registradas.</div><button class="btn accent mt" id="newm2">${icon('plus')} Registrar la primera medida</button></div></div>`;
     return `<a class="crumb" href="#/pacientes">${icon('back')} Pacientes</a>
-      <div class="page-head"><div class="row"><span class="ini" style="width:56px;height:56px;border-radius:16px;font-size:20px">${initials(p.nombre)}</span>
-        <div><h1>${esc(p.nombre)}</h1><p>${[p.telefono, p.dni && 'DNI ' + p.dni, edad != null && edad + ' años', p.ocupacion].filter(Boolean).map(esc).join(' · ') || 'Sin datos de contacto'}</p></div></div>
-        <div class="actions"><button class="btn" id="pedit">${icon('edit')} Editar</button>${p.telefono ? `<a class="btn wa" target="_blank" rel="noopener" href="${waLink(p.telefono)}">${icon('wa')} WhatsApp</a>` : ''}
-        <button class="btn accent" id="newm">${icon('plus')} Nueva medida</button><a class="btn primary" href="#/nueva-orden?p=${p.id}">${icon('file')} Nueva venta</a></div></div>
-      ${p.notas ? `<div class="card card-b" style="margin-bottom:18px"><span class="muted small strong">NOTAS</span><div>${esc(p.notas)}</div></div>` : ''}
-      <div class="split">
-        <div class="card"><div class="card-h"><div><h3>Historial de medidas</h3><div class="sub">${ms.length ? 'Cada examen se guarda; nada se sobrescribe.' : ''}</div></div>${ms.length > 1 ? `<button class="btn sm" id="evo">${icon('chart')} Evolución</button>` : ''}</div>
-          <div class="card-b">${ms.length ? ms.map((m, i) => medidaCard(m, p, i === 0)).join('') : `<div class="empty">${icon('eye')}<div>Aún no tiene medidas registradas.</div></div>`}</div></div>
-        <div class="card"><div class="card-h"><h3>Compras</h3><span class="sub">${os.length} orden${os.length === 1 ? '' : 'es'}</span></div>
-          <div class="card-b" style="padding:10px 0 6px">${os.length ? os.map(o => `<a class="list-item link" href="#/orden/${o.id}"><span class="ordnum">N° ${pad(o.numero)}</span>
-            <span class="grow"><span class="t num">${money(totalOrden(o))}</span><span class="d">${fdate(o.fecha)}</span></span><span style="display:grid;gap:4px;justify-items:end">${estadoChip(o)}${deudaChip(o)}</span></a>`).join('') : `<div class="empty">Sin compras.</div>`}</div></div>
+      <div class="pf-grid2">
+        <div class="pf-stack">
+          <div class="card pf-pad pf-head">
+            <div class="pf-id"><span class="ini">${initials(p.nombre)}</span><div style="min-width:0"><h1>${esc(p.nombre)}</h1><div class="muted small">${[edad != null && edad + ' años', p.ocupacion].filter(Boolean).map(esc).join(' · ') || 'Paciente'}</div></div>
+              <button class="btn ghost icon sm" id="pedit" title="Editar datos">${icon('edit')}</button></div>
+            ${kv.length ? `<div class="pf-kv">${kv.map(([k, v]) => `<span>${k}</span><b>${k === 'Próximo control' ? v : esc(v)}</b>`).join('')}</div>` : ''}
+            ${p.notas ? `<div class="pf-note">${icon('edit')}<span>${esc(p.notas)}</span></div>` : ''}
+            <div class="pf-btns"><a class="btn primary" href="#/nueva-orden?p=${p.id}">${icon('file')} Nueva venta</a>${p.telefono ? `<a class="btn wa" target="_blank" rel="noopener" href="${waLink(p.telefono)}">${icon('wa')} WhatsApp</a>` : ''}</div>
+            <button class="btn accent" id="newm">${icon('plus')} Registrar nueva medida</button>
+          </div>
+          <div class="card pf-hist"><div class="card-h"><div><h3>Historial de medidas</h3><div class="sub">${ms.length ? 'Cada examen se guarda; nada se sobrescribe.' : 'Todavía no hay exámenes.'}</div></div><span class="kcount pf-n">${ms.length}</span></div>
+            ${ms.length ? `<div class="pf-tl">${ms.map((x, j) => `<button class="pf-tli ${j === i ? 'on' : ''}" data-msel="${x.id}"><span class="pf-td">${fdate(x.fecha, { day: 'numeric', month: 'short' })}<small>${x.fecha.slice(0, 4)}</small></span>
+              <span style="min-width:0"><b>${esc(x.lente || 'Examen visual')}</b>${j === 0 ? ' <span class="chip listo">Más reciente</span>' : ''}<span class="d num">OD ${rxCorto(x.od)} · OI ${rxCorto(x.oi)}</span><span class="d">${esc(socioName(x.por))}</span></span></button>`).join('')}</div>` : ''}</div>
+          <div class="card pf-comp"><div class="card-h"><h3>Compras</h3><span class="sub">${os.length} orden${os.length === 1 ? '' : 'es'}</span></div>
+            <div class="card-b" style="padding:6px 0">${os.length ? os.map(o => `<a class="list-item link" href="#/orden/${o.id}"><span class="ordnum">N° ${pad(o.numero)}</span>
+              <span class="grow"><span class="t">${esc(o.items.map(x => x.desc).join(' + '))}</span><span class="d">${fdate(o.fecha)} · <span class="num">${money(totalOrden(o))}</span></span></span><span style="display:grid;gap:4px;justify-items:end">${estadoChip(o)}${deudaChip(o)}</span></a>`).join('') : `<div class="empty" style="padding:18px">Sin compras.</div>`}</div></div>
+        </div>
+        <div class="pf-stack">
+          ${detalle}
+          ${ms.length > 1 ? `<div class="card pf-pad pf-evoc"><div class="row between wrap" style="gap:10px"><div><h3>Evolución de la vista</h3><div class="sub muted small">Esfera en cada examen · más abajo = más miopía, más arriba = más hipermetropía</div></div>
+            <div class="row" style="gap:12px"><span class="small"><span class="pf-dot" style="--c:#0891b2"></span>OD</span><span class="small"><span class="pf-dot" style="--c:#c026d3"></span>OI</span><button class="btn sm ghost" id="evo">${icon('chart')} Ver tabla</button></div></div>
+            ${evolucionSVG(ms)}</div>` : ''}
+        </div>
       </div>`;
   },
   bind(id) {
     const p = paciente(id); if (!p) return;
     $('#pedit').onclick = () => pacienteForm(p);
     $('#newm').onclick = () => medidaForm(p);
+    $('#newm2') && ($('#newm2').onclick = () => medidaForm(p));
     $('#evo') && ($('#evo').onclick = () => evolucion(p));
+    $$('[data-msel]').forEach(b => b.onclick = () => {
+      medSel[id] = b.dataset.msel; render();
+      if (matchMedia('(max-width:900px)').matches) setTimeout(() => $('.pf-det')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    });
     $$('[data-mimg]').forEach(b => b.onclick = () => medidaImagen(db.medidas.find(m => m.id === b.dataset.mimg), p));
     $$('[data-medit]').forEach(b => b.onclick = () => {
       const m = db.medidas.find(x => x.id === b.dataset.medit);
@@ -703,19 +1382,107 @@ function roundRect(x, a, b, w, h, r) { x.beginPath(); x.moveTo(a + r, b); x.arcT
 function wrapText(x, t, a, y, max, lh) { let line = ''; for (const w of t.split(' ')) { const test = line + w + ' '; if (x.measureText(test).width > max && line) { x.fillText(line, a, y); line = w + ' '; y += lh; } else line = test; } x.fillText(line, a, y); return y; }
 
 // ---------- Órdenes ----------
-let ordFiltro = 'activas';
+// Vista "Tablero" (columnas por estado, se arrastran) o "Lista" (tabla con filtros).
+let ordFiltro = 'activas', tabFiltro = 'todos', ordBusca = '';
+let ordVista = (() => { try { return localStorage.getItem('terra-ord-vista') || 'tablero'; } catch (e) { return 'tablero'; } })();
+const COLS_TABLERO = [['pendiente', 'En laboratorio', '#7c3aed'], ['listo', 'Listo para recoger', '#0891b2'], ['entregado', 'Entregado', '#079455']];
+const diasAtraso = o => o.estado === 'pendiente' && o.entrega && o.entrega < hoy() ? diasEntre(o.entrega, hoy()) : 0;
+const fcorta = s => fdate(s, { day: 'numeric', month: 'short' });
+const buscaOrden = (o, f, d) => { if (!f) return true; const p = paciente(o.pacienteId); return (d && (String(o.numero) === String(+d) || pad(o.numero).includes(d) || String(p?.telefono).replace(/\D/g, '').includes(d))) || !!p?.nombre.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes(f); };
+// Cambia el estado de una orden (desde el tablero o desde la orden). Si debe saldo al entregar, ofrece cobrarlo.
+function cambiarEstado(o, e) {
+  if (!o || o.estado === e) return;
+  const p = paciente(o.pacienteId), nom = p ? p.nombre.split(' ')[0] : 'el cliente';
+  const doit = () => {
+    o.estado = e; o.entregado = e === 'entregado' ? hoy() : null;
+    if (e === 'listo') o.listoDesde = hoy();
+    if (e === 'pendiente') { delete o.listoDesde; delete o.avisado; }
+    save(); render();
+    if (e === 'listo') toast(p?.telefono ? `Orden ${pad(o.numero)} lista. Avísale a ${nom} con el botón verde.` : `Orden ${pad(o.numero)} lista.`);
+    else if (e === 'entregado') toast(`Orden ${pad(o.numero)} entregada a ${nom}`);
+    else toast(`Orden ${pad(o.numero)} volvió a laboratorio`);
+  };
+  const s = saldoOrden(o);
+  if (e === 'entregado' && s > 0.009) modal({
+    title: `Entregar orden N° ${pad(o.numero)}`,
+    body: `<p style="margin:0">${esc(p ? p.nombre : 'El cliente')} todavía debe <b class="num">${money(s)}</b>. ¿Le cobras antes de entregar?</p>`,
+    foot: `<button class="btn" data-close>Cancelar</button><button class="btn" id="eig">Entregar sin cobrar</button><button class="btn accent" id="ecob">${icon('cash')} Cobrar y entregar</button>`,
+    onMount: bg => { $('#eig', bg).onclick = () => { closeModal(); doit(); }; $('#ecob', bg).onclick = () => cobrarForm(o, doit); },
+  });
+  else doit();
+}
+function tarjetaOrden(o) {
+  const p = paciente(o.pacienteId), s = saldoOrden(o), a = diasAtraso(o);
+  const aviso = a ? `<span class="chip deuda">${a} ${a === 1 ? 'día' : 'días'} de retraso</span>`
+    : o.estado === 'listo' ? (o.avisado ? `<span class="chip entr">Avisado ${fcorta(o.avisado)}</span>` : o.listoDesde ? `<span class="chip listo">Desde ${fcorta(o.listoDesde)}</span>` : '')
+    : o.estado === 'pendiente' && o.entrega === hoy() ? `<span class="chip pend">Entrega hoy</span>` : '';
+  const fecha = o.estado === 'entregado' ? (o.directa ? `Venta directa · ${fcorta(o.entregado || o.fecha)}` : `Entregado ${fcorta(o.entregado || o.fecha)}`) : o.entrega ? `Entrega ${fcorta(o.entrega)}` : 'Sin fecha de entrega';
+  const btns = o.estado === 'pendiente' ? `<button class="btn sm" data-mv="listo">${icon('check')} Marcar listo</button>`
+    : o.estado === 'listo' ? `${p?.telefono ? `<a class="btn sm wa" data-wa target="_blank" rel="noopener" href="${waLink(p.telefono, ordenWaTexto(o, p))}">${icon('wa')} Avisar</a>` : ''}<button class="btn sm" data-mv="entregado">Entregar</button>` : '';
+  return `<article class="kcard ${a ? 'late' : ''}" draggable="true" data-id="${o.id}">
+    <div class="kt"><span class="ordnum">N° ${pad(o.numero)}</span>${aviso}</div>
+    <div class="kpac"><span class="ini">${initials(p?.nombre)}</span><div style="min-width:0"><b class="kp">${esc(p?.nombre || 'Sin paciente')}</b><div class="kx">${esc(o.items.map(i => i.desc).join(' + '))}</div></div></div>
+    <div class="kf"><span class="${a ? 'late-t' : ''}">${fecha}</span>${s > 0.009 ? `<span class="chip pend num">Saldo ${money(s)}</span>` : `<span class="chip entr">Pagado</span>`}</div>
+    ${btns ? `<div class="kb">${btns}</div>` : ''}</article>`;
+}
 routes.ordenes = {
   html() {
-    return `<div class="page-head"><div><h1>Órdenes</h1><p>Busca por número, nombre o teléfono.</p></div>
-      <div class="actions"><a class="btn primary" href="#/nueva-orden">${icon('plus')} Nueva venta</a></div></div>
-      <div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="oseg">${[['activas', 'Por entregar'], ['listo', 'Listas'], ['deuda', 'Con saldo'], ['todas', 'Todas']].map(([k, t]) => `<button data-k="${k}" class="${k === ordFiltro ? 'on' : ''}">${t}</button>`).join('')}</div>
-      <input class="inp" id="of" style="flex:1;min-width:200px" placeholder="N° de orden, nombre o teléfono…"></div><div id="olist"></div></div>`;
+    const vistaSeg = `<div class="seg" id="ovista">${[['tablero', 'Tablero'], ['lista', 'Lista']].map(([k, t]) => `<button data-v="${k}" class="${k === ordVista ? 'on' : ''}">${t}</button>`).join('')}</div>`;
+    const head = `<div class="page-head"><div><h1>Pedidos</h1><p>${ordVista === 'tablero' ? (matchMedia('(pointer:coarse)').matches ? 'Usa los botones de cada tarjeta y desliza a los lados para ver las columnas. Las atrasadas salen en rojo.' : 'Arrastra la tarjeta a la siguiente columna o usa sus botones. Las atrasadas salen en rojo.') : 'Busca por número, nombre o teléfono.'}</p></div>
+      <div class="actions">${vistaSeg}<a class="btn primary" href="#/nueva-orden">${icon('plus')} Nueva venta</a></div></div>`;
+    if (ordVista === 'tablero') {
+      const nAtr = db.ordenes.filter(diasAtraso).length;
+      return head + `<div class="row wrap" style="margin-bottom:14px"><div class="seg" id="tseg">${[['todos', 'Todas'], ['atrasados', `Atrasadas${nAtr ? ` <span class="kcount">${nAtr}</span>` : ''}`], ['saldo', 'Con saldo']].map(([k, t]) => `<button data-k="${k}" class="${k === tabFiltro ? 'on' : ''}">${t}</button>`).join('')}</div>
+        <input class="inp" id="of" style="flex:1;min-width:200px" placeholder="N° de orden, nombre o teléfono…" value="${esc(ordBusca)}"></div><div id="kan" class="kan"></div>`;
+    }
+    return head + `<div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="oseg">${[['activas', 'Por entregar'], ['listo', 'Listas'], ['deuda', 'Con saldo'], ['todas', 'Todas']].map(([k, t]) => `<button data-k="${k}" class="${k === ordFiltro ? 'on' : ''}">${t}</button>`).join('')}</div>
+      <input class="inp" id="of" style="flex:1;min-width:200px" placeholder="N° de orden, nombre o teléfono…" value="${esc(ordBusca)}"></div><div id="olist"></div></div>`;
   },
   bind() {
+    $$('#ovista button').forEach(b => b.onclick = () => { ordVista = b.dataset.v; try { localStorage.setItem('terra-ord-vista', ordVista); } catch (e) { } render(); });
+    const filtroTexto = () => { const f = $('#of').value.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); return [f, f.replace(/\D/g, '')]; };
+    if (ordVista === 'tablero') {
+      let verMas = false;
+      const draw = () => {
+        const [f, d] = filtroTexto();
+        const ok = o => buscaOrden(o, f, d) && (tabFiltro === 'todos' || (tabFiltro === 'atrasados' && diasAtraso(o)) || (tabFiltro === 'saldo' && saldoOrden(o) > 0.009));
+        const hace30 = (() => { const x = new Date(hoy() + 'T12:00:00'); x.setDate(x.getDate() - 30); return x.toISOString().slice(0, 10); })();
+        $('#kan').innerHTML = COLS_TABLERO.map(([k, t, c]) => {
+          let L = db.ordenes.filter(o => o.estado === k && ok(o)), extra = '';
+          if (k === 'pendiente') L.sort((a, b) => diasAtraso(b) - diasAtraso(a) || (a.entrega || '9').localeCompare(b.entrega || '9'));
+          else if (k === 'listo') L.sort((a, b) => (a.listoDesde || a.fecha).localeCompare(b.listoDesde || b.fecha));
+          else {
+            L.sort((a, b) => (b.entregado || b.fecha).localeCompare(a.entregado || a.fecha) || b.numero - a.numero);
+            // Solo las entregas del último mes; las demás con "Ver más" o en la Lista.
+            if (!f && !verMas) { const total = L.length; L = L.filter(o => (o.entregado || o.fecha) >= hace30).slice(0, 30); if (total > L.length) extra = `<button class="btn ghost sm" id="kmas">Ver ${total - L.length} más antiguas</button>`; }
+          }
+          return `<section class="kcol" data-col="${k}" style="--c:${c}" aria-label="${t}"><div class="kh"><span class="kd"></span><b>${t}</b><em>${L.length}</em></div>
+            ${L.map(tarjetaOrden).join('') || `<div class="kempty">Nada por aquí</div>`}${extra}</section>`;
+        }).join('');
+        let arrastrando = null;
+        $$('#kan .kcard').forEach(c => {
+          const o = orden(c.dataset.id);
+          c.onclick = e => { if (e.target.closest('button,a')) return; go('#/orden/' + o.id); };
+          c.addEventListener('dragstart', e => { arrastrando = o; c.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', o.id); } catch (_) { } });
+          c.addEventListener('dragend', () => { c.classList.remove('dragging'); $$('#kan .kcol').forEach(x => x.classList.remove('over')); });
+          $$('[data-mv]', c).forEach(b => b.onclick = () => cambiarEstado(o, b.dataset.mv));
+          $('[data-wa]', c) && ($('[data-wa]', c).onclick = () => { o.avisado = hoy(); save(); setTimeout(draw, 300); });
+        });
+        $$('#kan .kcol').forEach(col => {
+          col.addEventListener('dragover', e => { if (!arrastrando) return; e.preventDefault(); col.classList.add('over'); });
+          col.addEventListener('dragleave', e => { if (!col.contains(e.relatedTarget)) col.classList.remove('over'); });
+          col.addEventListener('drop', e => { e.preventDefault(); col.classList.remove('over'); const o = arrastrando; arrastrando = null; if (o) cambiarEstado(o, col.dataset.col); });
+        });
+        $('#kmas') && ($('#kmas').onclick = () => { verMas = true; draw(); });
+      };
+      $$('#tseg button').forEach(b => b.onclick = () => { tabFiltro = b.dataset.k; $$('#tseg button').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+      $('#of').oninput = () => { ordBusca = $('#of').value; draw(); }; draw();
+      return;
+    }
     const draw = () => {
-      const f = $('#of').value.trim().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(), d = f.replace(/\D/g, '');
+      const [f, d] = filtroTexto();
       const list = db.ordenes.filter(o => ordFiltro === 'todas' || (ordFiltro === 'activas' && o.estado !== 'entregado') || (ordFiltro === 'listo' && o.estado === 'listo') || (ordFiltro === 'deuda' && saldoOrden(o) > 0.009))
-        .filter(o => { if (!f) return true; const p = paciente(o.pacienteId); return (d && (String(o.numero) === String(+d) || pad(o.numero).includes(d) || String(p?.telefono).replace(/\D/g, '').includes(d))) || p?.nombre.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().includes(f); })
+        .filter(o => buscaOrden(o, f, d))
         .sort((a, b) => b.numero - a.numero);
       $('#olist').innerHTML = list.length ? `<div class="tbl-wrap"><table><thead><tr><th>N°</th><th>Paciente</th><th class="hide-sm">Fecha</th><th class="hide-sm">Entrega</th><th class="r">Total</th><th class="r">Saldo</th><th>Estado</th></tr></thead><tbody>
         ${list.map(o => { const s = saldoOrden(o); return `<tr class="link" data-h="#/orden/${o.id}"><td class="ordnum">${pad(o.numero)}</td><td><b>${esc(paciente(o.pacienteId)?.nombre)}</b><div class="muted small">${esc(o.items.map(i => i.desc).join(' · ')).slice(0, 60)}</div></td>
@@ -724,7 +1491,7 @@ routes.ordenes = {
       $$('[data-h]').forEach(r => r.onclick = () => go(r.dataset.h));
     };
     $$('#oseg button').forEach(b => b.onclick = () => { ordFiltro = b.dataset.k; $$('#oseg button').forEach(x => x.classList.toggle('on', x === b)); draw(); });
-    $('#of').oninput = draw; draw();
+    $('#of').oninput = () => { ordBusca = $('#of').value; draw(); }; draw();
   },
 };
 
@@ -737,33 +1504,36 @@ routes['nueva-orden'] = {
     const p = paciente(draft.pacienteId);
     const ms = p ? medidasDe(p.id) : [];
     if (p && !draft.medidaId && ms[0]) draft.medidaId = ms[0].id;
-    return `<a class="crumb" href="#/ordenes">${icon('back')} Órdenes</a>
-      <div class="page-head"><div><h1>Nueva venta</h1><p>Se generará la orden N° ${pad(db.config.nextOrden)}</p></div></div>
-      <div class="split">
-        <div class="grid" style="gap:18px">
-          <div class="card"><div class="card-h"><h3>1 · Paciente</h3>${p ? `<button class="btn sm ghost" id="chp">Cambiar</button>` : ''}</div><div class="card-b">
+    if (!draft.paso || (!p && draft.paso > 1)) draft.paso = p ? 2 : 1;
+    const pasos = ['Paciente', 'Montura y lunas', 'Cobro'];
+    return `<div class="page-head vhead"><div><h1>Nueva venta</h1><p>Se generará el pedido N° ${pad(db.config.nextOrden)}</p></div>
+        <div class="steps" id="vsteps">${pasos.map((t, i) => `<button type="button" class="stp" data-paso="${i + 1}"><span>${i + 1}</span><em>${t}</em></button>`).join('')}</div></div>
+      <div class="vgrid">
+        <div class="vmain">
+          <div class="card vstep" data-paso="1"><div class="card-h"><h3>¿Para quién es la venta?</h3>${p ? `<button class="btn sm ghost" id="chp">Cambiar</button>` : ''}</div><div class="card-b">
             ${p ? `<div class="row"><span class="ini">${initials(p.nombre)}</span><div class="grow"><b>${esc(p.nombre)}</b><div class="muted small">${esc(p.telefono || '')}</div></div></div>
               <label class="f mt">Medida para esta orden<select class="inp" id="msel">${ms.length ? ms.map(m => `<option value="${m.id}" ${m.id === draft.medidaId ? 'selected' : ''}>${fdate(m.fecha)} — OD ${rx2((m.od.esf))} ${rx2((m.od.cil))} · OI ${rx2((m.oi.esf))} ${rx2((m.oi.cil))}</option>`).join('') : ''}<option value="" ${!draft.medidaId ? 'selected' : ''}>Sin medida (solo venta)</option></select></label>
               <button class="btn sm mt-s" id="addm">${icon('plus')} Registrar medida ahora</button>`
-      : `<div class="search" style="max-width:none">${icon('search')}<input id="psearch" placeholder="Buscar paciente por nombre o teléfono…" autocomplete="off"><div class="sr" id="pres" hidden></div></div>
-              <button class="btn sm mt-s" id="newp2">${icon('plus')} Paciente nuevo</button>`}
+      : `<p class="muted small" style="margin:0 0 10px">Busca por nombre o celular. Si es nuevo, regístralo con su DNI.</p><div class="search" style="max-width:none">${icon('search')}<input id="psearch" placeholder="Nombre o celular del paciente…" autocomplete="off"><div class="sr" id="pres" hidden></div></div>
+              <button class="btn mt-s" id="newp2">${icon('plus')} Paciente nuevo</button>
+              ${(r => r.length ? `<div class="vrec"><div class="muted small strong">Atendidos hace poco</div>${r.map(x => `<button type="button" class="vrec-i" data-rp="${x.id}"><span class="ini">${initials(x.nombre)}</span><span class="grow"><b>${esc(x.nombre)}</b><span class="muted small">${esc(x.telefono || x.dni || '')}</span></span>${icon('back')}</button>`).join('')}</div>` : '')(db.pacientes.slice().sort((a, b) => (b.creado || 0) - (a.creado || 0)).slice(0, 5))}`}
           </div></div>
-          <div class="card"><div class="card-h"><h3>2 · Productos</h3></div><div class="card-b">
+          <div class="card vstep" data-paso="2"><div class="card-h"><h3>Montura, lunas y accesorios</h3>${p ? `<span class="muted small">${esc(p.nombre)}</span>` : ''}</div><div class="card-b">
             <div class="fg"><div class="fld">Montura<div class="search" style="max-width:none">${icon('search')}<input id="mcode" placeholder="N° de varilla, marca o sigla…" autocomplete="off"><div class="sr" id="mres" hidden></div></div></div>
             <label class="f">Lunas<select class="inp" id="csel"><option value="">Elegir tipo de luna…</option>${gruposTarifa().map(([g, ts]) => `<optgroup label="${esc(g)}">${ts.map(t => `<option value="t:${t.id}">${esc(t.nombre)}</option>`).join('')}</optgroup>`).join('')}
-              ${db.cristales.length ? `<optgroup label="Otros cristales (precio fijo)">${db.cristales.map(c => `<option value="c:${c.id}">${esc(c.nombre)} — ${money(c.precio)}</option>`).join('')}</optgroup>` : ''}</select></label>
-            <div class="fld">Accesorios y otros<div class="search" style="max-width:none">${icon('search')}<input id="pq" placeholder="Ej. tornillo, plaquetas, estuche…" autocomplete="off"><div class="sr" id="pres" hidden></div></div></div></div>
+              ${db.cristales.length ? `<optgroup label="Otros cristales (precio fijo)">${db.cristales.map(c => `<option value="c:${c.id}">${esc(c.nombre)} — ${money(c.precio)}</option>`).join('')}</optgroup>` : ''}</select>
+              ${!db.tarifas.length && !db.cristales.length ? `<span class="hint">Aún no tienes precios de lunas. Créalos en <a class="lnk" href="#/inventario" id="irlunas">Inventario → Precios de lunas</a> o agrégalas con “Otro producto”.</span>` : ''}</label>
+            <div class="fld">Accesorios y otros<div class="search" style="max-width:none">${icon('search')}<input id="pq" placeholder="Ej. tornillo, plaquetas, estuche…" autocomplete="off"><div class="sr" id="prodres" hidden></div></div></div></div>
             <div id="lpanel"></div>
             <div class="tbl-wrap mt"><table class="items"><thead><tr><th>Descripción</th><th class="c" style="width:70px">Cant.</th><th class="r" style="width:120px">Precio</th><th class="r" style="width:110px">Subtotal</th><th style="width:40px"></th></tr></thead><tbody id="itbody"></tbody></table></div>
             <button class="btn sm mt-s" id="addo">${icon('plus')} Otro producto o servicio</button>
           </div></div>
-        </div>
-        <div class="card" style="position:sticky;top:90px"><div class="card-h"><h3>3 · Pago</h3></div><div class="card-b">
+          <div class="card vstep" data-paso="3"><div class="card-h"><h3>Cobro y entrega</h3></div><div class="card-b">
           <form id="oform" class="form">
             <div class="seg vtipo" id="vtipo"><button type="button" data-v="encargo">Encargo</button><button type="button" data-v="directa">Venta directa</button></div>
             <div class="hint" id="vhint" style="margin-top:-6px"></div>
             <div class="totals"><div><span class="muted">Subtotal</span><b class="num" id="tsub">S/ 0.00</b></div>
-            <div><span class="muted">Descuento</span><input class="inp sm num" name="descuento" id="tdesc" inputmode="decimal" style="width:110px;text-align:right" value="${esc(draft.descuento)}" placeholder="0.00"></div>
+            <div><span class="muted">Descuento</span><input class="inp sm num" name="descuento" id="tdesc" inputmode="decimal" style="width:110px;text-align:right" value="${puede('descuentos') ? esc(draft.descuento) : ''}" placeholder="0.00" ${puede('descuentos') ? '' : 'disabled title="Los descuentos los pone el dueño o un socio"'}></div>
             <div class="big"><span>Total</span><span class="num" id="ttot">S/ 0.00</span></div></div>
             <label class="f"><span id="labono">A cuenta (abono)</span><input class="inp" name="abono" id="abono" inputmode="decimal" placeholder="0.00"></label>
             <div class="pay-opts">${METODOS.map((m, i) => `<label><input type="radio" name="metodo" value="${m}" ${i === 0 ? 'checked' : ''}><span>${m}</span></label>`).join('')}</div>
@@ -773,13 +1543,39 @@ routes['nueva-orden'] = {
             <label class="f">Comprobante<select class="inp" name="cptipo">${[['nota', 'Nota de venta'], ['boleta', 'Boleta de venta'], ['factura', 'Factura'], ['', 'Ninguno por ahora']].map(([v, t]) => `<option value="${v}" ${v === (fact().ruc ? 'boleta' : 'nota') ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
             <button class="btn primary" style="padding:13px" id="ogo">${icon('check')} Registrar venta</button>
           </form></div></div>
-      </div>`;
+        </div>
+        <aside class="card vside"><div class="card-h"><h3 class="vs-eb">Resumen de la venta</h3></div><div class="card-b" id="vres"></div></aside>
+      </div>
+      <div class="vbar" id="vbar"></div>`;
   },
   bind() {
     const p = paciente(draft.pacienteId);
+    const irPaso = n => {
+      if (n > 1 && !draft.pacienteId) { toast('Primero elige el paciente'); n = 1; }
+      else if (n > 2 && !draft.items.some(i => i.desc && num(i.cant) > 0)) { toast('Agrega al menos un producto'); n = 2; }
+      draft.paso = n;
+      $$('.vstep').forEach(c => c.classList.toggle('on', +c.dataset.paso === n));
+      $$('#vsteps .stp').forEach(b => { const k = +b.dataset.paso; b.classList.toggle('on', k === n); b.classList.toggle('done', k < n); b.querySelector('span').innerHTML = k < n ? icon('check') : k; });
+      resumen(); window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    // Resumen al costado (computadora) y barra de abajo (celular): total, a cuenta, saldo y el botón para avanzar.
+    const resumen = () => {
+      const med = db.medidas.find(m => m.id === draft.medidaId);
+      const sub = draft.items.reduce((s, i) => s + num(i.cant) * num(i.precio), 0), tot = round2(sub - num(draft.descuento));
+      const ab = $('#abono') ? Math.min(numPago($('#abono').value), Math.max(0, tot)) : 0;
+      const sig = draft.paso < 3 ? `<button type="button" class="btn primary vnext" data-sig="${draft.paso + 1}">${draft.paso === 1 ? 'Continuar' : 'Ir a cobrar'} ${icon('back')}</button>` : '';
+      $('#vres').innerHTML = `${p ? `<div class="row" style="gap:10px"><span class="ini">${initials(p.nombre)}</span><div class="grow" style="min-width:0"><b>${esc(p.nombre)}</b><div class="muted small">${med ? `Medida del ${fdate(med.fecha)}` : 'Sin medida'}</div></div></div>` : `<div class="muted small">Todavía no eliges al paciente.</div>`}
+        <div class="vs-items">${draft.items.filter(i => i.desc).map(i => `<div class="row between"><span class="grow small">${esc(i.desc)}${num(i.cant) > 1 ? ` × ${num(i.cant)}` : ''}</span><b class="num small">${money(num(i.cant) * num(i.precio))}</b></div>`).join('') || '<div class="muted small">Sin productos todavía.</div>'}</div>
+        <div class="vs-tot">${num(draft.descuento) ? `<div class="row between"><span class="muted">Descuento</span><span class="num">− ${money(num(draft.descuento))}</span></div>` : ''}<div class="row between big"><span>Total</span><b class="num">${money(tot)}</b></div>
+        ${draft.paso === 3 ? `<div class="row between"><span class="muted">A cuenta</span><b class="num" style="color:var(--ok)">${money(ab)}</b></div><div class="row between"><span class="muted">Saldo al recoger</span><b class="num" style="color:${tot - ab > 0.009 ? 'var(--warn)' : 'var(--ok)'}">${money(Math.max(0, tot - ab))}</b></div>` : ''}</div>${sig}`;
+      $('#vbar').innerHTML = `<div class="vt"><div><small>Total</small><b class="num">${money(tot)}</b></div><div><small>A cuenta</small><b class="num" style="color:var(--ok)">${money(ab)}</b></div><div><small>Saldo</small><b class="num" style="color:var(--warn)">${money(Math.max(0, tot - ab))}</b></div></div>${draft.paso < 3 ? sig : `<button type="button" class="btn primary vnext" id="vgo">${$('#ogo').innerHTML}</button>`}`;
+      $$('.vnext[data-sig]').forEach(b => b.onclick = () => irPaso(+b.dataset.sig));
+      $('#vgo') && ($('#vgo').onclick = () => $('#oform').requestSubmit());
+    };
+    $$('#vsteps .stp').forEach(b => b.onclick = () => irPaso(+b.dataset.paso));
     const drawItems = () => {
       $('#itbody').innerHTML = draft.items.length ? draft.items.map((it, i) => `<tr><td><input class="inp" data-i="${i}" data-k="desc" value="${esc(it.desc)}"></td>
-        <td><input class="inp c" data-i="${i}" data-k="cant" inputmode="numeric" value="${esc(it.cant)}"></td><td><input class="inp r num" data-i="${i}" data-k="precio" inputmode="decimal" value="${esc(it.precio)}"></td>
+        <td><input class="inp c" data-i="${i}" data-k="cant" inputmode="numeric" value="${esc(it.cant)}"></td><td><input class="inp r num" data-i="${i}" data-k="precio" inputmode="decimal" value="${esc(it.precio)}" ${it.ref && !puede('descuentos') ? 'readonly title="El precio de la lista lo cambia el dueño o un socio"' : ''}></td>
         <td class="r num" id="st${i}">${money(num(it.cant) * num(it.precio))}</td><td><button type="button" class="btn ghost icon sm" data-del="${i}" aria-label="Quitar">${icon('x')}</button></td></tr>`).join('')
         : `<tr><td colspan="5" class="empty" style="padding:18px">Agrega una montura, lunas u otro producto.</td></tr>`;
       $$('#itbody [data-k]').forEach(inp => inp.oninput = () => { draft.items[inp.dataset.i][inp.dataset.k] = inp.value; if (inp.dataset.k === 'precio') draft.items[inp.dataset.i].auto = false; const it = draft.items[inp.dataset.i]; $('#st' + inp.dataset.i).textContent = money(num(it.cant) * num(it.precio)); calc(); });
@@ -800,6 +1596,7 @@ routes['nueva-orden'] = {
       ab.readOnly = dir; $('#solo-encargo').hidden = dir;
       $('#ogo').innerHTML = `${icon('check')} ${dir ? 'Cobrar y entregar' : 'Registrar venta'}`;
       $('#tresta').textContent = money(Math.max(0, tot - numPago(ab.value)));
+      resumen();
     };
     const esDirecta = () => draft.modo ? draft.modo === 'directa' : draft.items.length > 0 && !draft.items.some(i => itemLab(i, db.monturas));
     $$('#vtipo button').forEach(b => b.onclick = () => { draft.modo = b.dataset.v; calc(); });
@@ -864,6 +1661,7 @@ routes['nueva-orden'] = {
       });
       return n;
     };
+    $('#irlunas') && ($('#irlunas').onclick = () => { invTab = 'cristales'; });
     $('#csel').onchange = () => {
       const [k, id] = $('#csel').value.split(':');
       if (k === 't') { tSel = tarifa(id); fSel = null; panel(); return; }
@@ -877,11 +1675,11 @@ routes['nueva-orden'] = {
       if (conStock(p) && num(p.stock) <= 0) toast(`Atención: ${p.nombre} figura sin stock`);
       draft.items.push({ tipo: 'producto', ref: p.id, desc: p.nombre, cant: 1, precio: p.precio }); drawItems();
     };
-    buscadorProductos($('#pq'), $('#pres'), agregarProducto);
+    buscadorProductos($('#pq'), $('#prodres'), agregarProducto);
     repreciar();
     $('#addo').onclick = () => { draft.items.push({ tipo: 'otro', desc: '', cant: 1, precio: '' }); drawItems(); $$('#itbody [data-k=desc]').pop().focus(); };
     if (p) {
-      $('#chp').onclick = () => { draft.pacienteId = ''; draft.medidaId = ''; go('#/nueva-orden'); render(); };
+      $('#chp').onclick = () => { draft.pacienteId = ''; draft.medidaId = ''; draft.paso = 1; go('#/nueva-orden'); render(); };
       $('#msel') && ($('#msel').onchange = e => {
         draft.medidaId = e.target.value;
         if (repreciar()) { toast('Precio de las lunas ajustado a la medida'); drawItems(); }
@@ -895,9 +1693,10 @@ routes['nueva-orden'] = {
         const ps = db.pacientes.filter(x => x.nombre.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().includes(q) || String(x.telefono).replace(/\D/g, '').includes(q.replace(/\D/g, '') || '§')).slice(0, 8);
         res.innerHTML = ps.map(x => `<a href="#" data-p="${x.id}"><span class="ini" style="width:30px;height:30px;font-size:12px">${initials(x.nombre)}</span><span><b>${esc(x.nombre)}</b><br><span class="muted small">${esc(x.telefono)}</span></span></a>`).join('') || `<div class="empty small">Sin resultados</div>`;
         res.hidden = false;
-        $$('[data-p]', res).forEach(a => a.onclick = e => { e.preventDefault(); draft.pacienteId = a.dataset.p; draft.medidaId = ''; render(); });
+        $$('[data-p]', res).forEach(a => a.onclick = e => { e.preventDefault(); draft.pacienteId = a.dataset.p; draft.medidaId = ''; draft.paso = 2; render(); });
       };
-      inp.focus();
+      $$('[data-rp]').forEach(b => b.onclick = () => { draft.pacienteId = b.dataset.rp; draft.medidaId = ''; draft.paso = 2; render(); });
+      if (!('ontouchstart' in window)) inp.focus();
       $('#newp2').onclick = () => pacienteFormForOrder();
     }
     $('#oform').onsubmit = e => {
@@ -928,15 +1727,15 @@ routes['nueva-orden'] = {
         onMount: bg => { $('#nopago', bg).onclick = () => { closeModal(); registrar(0); }; $('#todo', bg).onclick = () => { closeModal(); registrar(tot); }; },
       });
     };
-    drawItems();
+    drawItems(); irPaso(draft.paso);
   },
 };
 function pacienteFormForOrder() {
   modal({
     title: 'Paciente nuevo',
-    body: `<form id="pq" class="form"><label class="f">Nombre completo<input class="inp" name="nombre" required></label><label class="f">Celular<input class="inp" name="telefono" inputmode="tel"></label><label class="f">DNI<input class="inp" name="dni" inputmode="numeric"></label></form>`,
+    body: `<form id="pq" class="form"><label class="f">DNI<input class="inp" name="dni" inputmode="numeric" maxlength="12" placeholder="Con el DNI se llena el nombre"></label><label class="f">Nombre completo<input class="inp" name="nombre" required></label><label class="f">Celular<input class="inp" name="telefono" inputmode="tel"></label></form>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="pq">Guardar</button>`,
-    onMount: bg => { $('#pq', bg).onsubmit = e => { e.preventDefault(); const f = readForm(e.target); const p = { id: uid(), creado: Date.now(), creadoF: hoy(), por: user, ...f }; db.pacientes.push(p); save(); draft.pacienteId = p.id; closeModal(); render(); }; },
+    onMount: bg => { enlazarDoc($('[name=dni]', bg), $('[name=nombre]', bg)); $('#pq', bg).onsubmit = e => { e.preventDefault(); const f = readForm(e.target); const p = { id: uid(), creado: Date.now(), creadoF: hoy(), por: user, ...f }; db.pacientes.push(p); save(); draft.pacienteId = p.id; draft.paso = 2; closeModal(); render(); }; },
   });
 }
 
@@ -946,8 +1745,8 @@ routes.orden = {
     if (!o) return `<div class="empty">Orden no encontrada. <a class="strong" href="#/ordenes">Volver</a></div>`;
     const p = paciente(o.pacienteId), m = db.medidas.find(x => x.id === o.medidaId);
     const tot = totalOrden(o), pag = pagadoOrden(o), sal = round2(tot - pag), pagos = pagosDe(o.id), cp = comprobanteDe(o.id);
-    return `<a class="crumb" href="#/ordenes">${icon('back')} Órdenes</a>
-      <div class="page-head"><div><h1>Orden N° ${pad(o.numero)}</h1><p>${fdate(o.fecha, { day: 'numeric', month: 'long', year: 'numeric' })} · Atendió ${esc(socioName(o.por))}</p></div>
+    return `<a class="crumb" href="#/ordenes">${icon('back')} Pedidos</a>
+      <div class="page-head"><div><h1>Pedido N° ${pad(o.numero)}</h1><p>${fdate(o.fecha, { day: 'numeric', month: 'long', year: 'numeric' })} · Atendió ${esc(socioName(o.por))}</p></div>
         <div class="actions"><button class="btn ${cp ? '' : 'primary'}" id="ocp">${icon('file')} ${cp ? `${TIPOS_CP[cp.tipo]} ${esc(cpNum(cp))}` : 'Boleta / Factura'}</button>${p?.telefono ? `<a class="btn wa" id="owa" target="_blank" rel="noopener" href="${waLink(p.telefono, ordenWaTexto(o, p))}">${icon('wa')} ${o.estado === 'listo' ? 'Avisar que está listo' : 'WhatsApp'}</a>` : ''}
         <button class="btn ghost icon" id="odel" title="Anular orden">${icon('trash')}</button></div></div>
       <div class="card card-b" style="margin-bottom:18px"><div class="row between wrap"><div class="row wrap"><span class="muted small strong">ESTADO</span>
@@ -974,15 +1773,7 @@ routes.orden = {
   bind(id) {
     const o = orden(id); if (!o) return;
     const p = paciente(o.pacienteId);
-    $$('#est button').forEach(b => b.onclick = () => {
-      const e = b.dataset.e;
-      const doit = () => {
-        o.estado = e; o.entregado = e === 'entregado' ? hoy() : null; save(); render();
-        if (e === 'listo' && p?.telefono) toast('Avísale por WhatsApp con el botón verde');
-      };
-      if (e === 'entregado' && saldoOrden(o) > 0.009) confirmBox(`Esta orden todavía debe <b>${money(saldoOrden(o))}</b>. ¿Marcarla como entregada igual?`, doit, 'Marcar entregada');
-      else doit();
-    });
+    $$('#est button').forEach(b => b.onclick = () => cambiarEstado(o, b.dataset.e));
     $('#addpay') && ($('#addpay').onclick = () => cobrarForm(o));
     $$('[data-pdel]').forEach(b => b.onclick = () => {
       const pg = db.pagos.find(x => x.id === b.dataset.pdel);
@@ -999,7 +1790,7 @@ routes.orden = {
     $('#owa') && ($('#owa').onclick = () => { if (o.estado === 'listo') { o.avisado = hoy(); save(); } });
   },
 };
-function cobrarForm(o) {
+function cobrarForm(o, luego) {
   const s = saldoOrden(o);
   const fechaCerrada = cerrado(hoy());
   modal({
@@ -1014,7 +1805,7 @@ function cobrarForm(o) {
         e.preventDefault();
         const f = readForm(e.target), monto = round2(Math.min(numPago(f.monto), s));
         if (monto <= 0) { toast('Monto inválido'); return; }
-        const doit = () => { db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto, metodo: f.metodo, por: user, ts: Date.now(), tipo: 'saldo' }); save(); closeModal(); toast('Pago registrado'); render(); };
+        const doit = () => { db.pagos.push({ id: uid(), ordenId: o.id, fecha: hoy(), monto, metodo: f.metodo, por: user, ts: Date.now(), tipo: 'saldo' }); save(); closeModal(); if (luego) luego(); else { toast('Pago registrado'); render(); } };
         fechaCerrada ? dual(`Registrar pago con la caja del ${fdate(hoy())} cerrada`, doit) : doit();
       };
     },
@@ -1096,6 +1887,7 @@ function emitirForm(o, tipo) {
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="cpf" id="cpgo">${icon('file')} Generar PDF</button>`,
     onMount: bg => {
       const fDoc = $('[name=doc]', bg), fNom = $('[name=nombre]', bg), fDir = $('[name=direccion]', bg);
+      enlazarDoc(fDoc, fNom, fDir, { mayus: true });
       const set = t => {
         tipo = t;
         $$('#cptipo button', bg).forEach(b => b.classList.toggle('on', b.dataset.t === t));
@@ -1451,7 +2243,7 @@ function cajaData(d) {
     const out = gastos.filter(g => (g.metodo || 'Efectivo') === m).reduce((s, g) => s + num(g.monto), 0) + (m === 'Efectivo' ? vales.reduce((s, v) => s + num(v.monto), 0) : 0);
     return { m, inn, out, neto: round2(inn - out) };
   });
-  const socios = db.config.socios.map(s => {
+  const socios = autorizantes().map(s => {
     const parte = round2(utilidad * num(s.pct) / 100);
     const v = vales.filter(x => x.socioId === s.id).reduce((a, x) => a + num(x.monto), 0);
     return { ...s, parte, vales: v, neto: round2(parte - v) };
@@ -1460,57 +2252,59 @@ function cajaData(d) {
 }
 routes.caja = {
   html(d) {
-    d = d || hoy();
+    d = puede('otrosDias') && d || hoy(); // el vendedor solo ve la caja de hoy
     const c = cajaData(d), lock = cerrado(d), cierre = db.cierres.find(x => x.fecha === d);
     const vendido = db.ordenes.filter(o => o.fecha === d).reduce((s, o) => s + totalOrden(o), 0);
-    return `<div class="page-head"><div><h1>Caja diaria</h1><p class="cap">${flong(d)}</p></div>
-      <div class="actions"><a class="btn icon" href="#/caja/${addDays(d, -1)}" title="Día anterior">${icon('back')}</a><input class="inp" type="date" id="cdate" value="${d}" style="width:auto">
-        <a class="btn icon" href="#/caja/${addDays(d, 1)}" title="Día siguiente" style="transform:scaleX(-1)">${icon('back')}</a>${d !== hoy() ? `<a class="btn" href="#/caja">Hoy</a>` : ''}
-        <button class="btn" id="cprint" title="Descargar para Excel">${icon('down')}<span class="hide-sm">Excel</span></button>
-        ${lock ? `<button class="btn" id="reopen">${icon('unlock')} Reabrir</button>` : `<button class="btn primary" id="close">${icon('lock')} Cerrar caja</button>`}</div></div>
+    return `<div class="page-head"><div><h1>Caja del día</h1><p class="cap">${flong(d)}</p></div>
+      <div class="actions">${puede('otrosDias') ? `<a class="btn icon" href="#/caja/${addDays(d, -1)}" title="Día anterior">${icon('back')}</a><input class="inp" type="date" id="cdate" value="${d}" style="width:auto">
+        <a class="btn icon" href="#/caja/${addDays(d, 1)}" title="Día siguiente" style="transform:scaleX(-1)">${icon('back')}</a>${d !== hoy() ? `<a class="btn" href="#/caja">Hoy</a>` : ''}` : ''}
+        ${puede('excel') ? `<button class="btn" id="cprint" title="Descargar para Excel">${icon('down')}<span class="hide-sm">Excel</span></button>` : ''}
+        ${!puede('cerrarCaja') ? '' : lock ? `<button class="btn" id="reopen">${icon('unlock')} Reabrir</button>` : `<button class="btn primary" id="close">${icon('lock')} Cerrar caja</button>`}</div></div>
       ${lock ? `<div class="locked" style="margin-bottom:18px">${icon('lock')} Caja cerrada por ${esc(socioName(cierre.por))} el ${new Date(cierre.ts).toLocaleString('es-PE', { dateStyle: 'medium', timeStyle: 'short' })}. Cualquier cambio necesita la clave de los dos socios.</div>` : ''}
-      <div class="grid g4">
-        <div class="card kpi"><div class="l"><i>${icon('wallet')}</i>Ingresos</div><div class="v num">${money(c.ingresos)}</div><div class="s">Vendido: ${money(vendido)}</div></div>
-        <div class="card kpi warn"><div class="l"><i>${icon('down')}</i>Gastos</div><div class="v num">${money(c.tGastos)}</div><div class="s">${c.gastos.length} registro${c.gastos.length === 1 ? '' : 's'}</div></div>
-        <div class="card kpi ink"><div class="l"><i>${icon('trend')}</i>Ganancia del día</div><div class="v num">${money(c.utilidad)}</div><div class="s">Ingresos − gastos</div></div>
-        <div class="card kpi gold"><div class="l"><i>${icon('cash')}</i>Efectivo en caja</div><div class="v num">${money(c.porMetodo[0].neto)}</div><div class="s">Descontando gastos y vales</div></div>
-      </div>
+      <section class="cashc">
+        <div class="cashc-m"><div class="row wrap" style="gap:8px"><span class="cashc-l">Efectivo que debe haber en la caja</span><span class="cashc-st">${lock ? `${icon('lock')} Cerrada` : '● Abierta'}</span></div>
+          <div class="cashc-v num">${money(c.porMetodo[0].neto)}</div>
+          <div class="cashc-brk"><span>Entró en efectivo <b class="num">+ ${money(c.porMetodo[0].inn)}</b></span>${c.porMetodo[0].out ? `<span>Gastos y vales <b class="num">− ${money(c.porMetodo[0].out)}</b></span>` : ''}</div>
+          ${c.porMetodo.slice(1).some(x => x.inn || x.out) ? `<div class="cashc-met">${c.porMetodo.slice(1).filter(x => x.inn || x.out).map(x => `<span><i style="background:${METODO_COLOR[x.m]}"></i>${x.m} <b class="num">${money(x.neto)}</b></span>`).join('')}</div>` : ''}</div>
+        <div class="cashc-side"><div class="hs"><span>Cobrado hoy</span><b class="num">${money(c.ingresos)}</b><em>Vendido: ${money(vendido)}</em></div>
+          ${puede('ganancias') ? `<div class="hs"><span>Gastos</span><b class="num">${money(c.tGastos)}</b></div><div class="hs"><span>Ganancia del día</span><b class="num">${money(c.utilidad)}</b></div>` : ''}</div>
+      </section>
       <div class="card mt"><div class="card-h"><h3>Ventas y cobros</h3><span class="sub">${c.pagos.length} movimiento${c.pagos.length === 1 ? '' : 's'}</span></div><div class="card-b"><div class="tbl-wrap">
         ${c.pagos.length ? `<table><thead><tr><th>N° orden</th><th>Paciente</th><th class="hide-sm">Compró</th><th class="r">Total</th><th class="r">Abonó</th><th class="r">Resta</th><th>Método</th></tr></thead><tbody>
         ${c.pagos.map(pg => { const o = orden(pg.ordenId); if (!o) return ''; const pagadoHasta = round2(pagosDe(o.id).filter(x => x.fecha < pg.fecha || (x.fecha === pg.fecha && (x.ts || 0) <= (pg.ts || 0))).reduce((s, x) => s + num(x.monto), 0));
           return `<tr class="link" data-h="#/orden/${o.id}"><td class="ordnum">${pad(o.numero)}</td><td><b>${esc(paciente(o.pacienteId)?.nombre)}</b>${pg.tipo === 'saldo' ? '<div class="muted small">Pago de saldo</div>' : ''}</td><td class="hide-sm small muted">${esc(o.items.map(i => i.desc).join(' · ')).slice(0, 70)}</td>
           <td class="r num">${money(totalOrden(o))}</td><td class="r num strong">${money(pg.monto)}</td><td class="r num" style="${totalOrden(o) - pagadoHasta > 0.009 ? 'color:var(--danger)' : ''}">${money(Math.max(0, totalOrden(o) - pagadoHasta))}</td><td><span class="tag">${esc(pg.metodo)}</span></td></tr>`; }).join('')}</tbody>
         <tfoot><tr><td colspan="4" class="r hide-sm-no">Total cobrado</td><td class="r num">${money(c.ingresos)}</td><td colspan="2"></td></tr></tfoot></table>` : `<div class="empty">No hay cobros este día.</div>`}</div></div></div>
-      <div class="grid g2 mt">
+      ${puede('ganancias') ? `<div class="grid g2 mt">
         <div class="card"><div class="card-h"><h3>Gastos</h3><button class="btn sm" id="addg">${icon('plus')} Gasto</button></div><div class="card-b">
           ${c.gastos.length ? `<table><tbody>${c.gastos.map(g => `<tr><td><b>${esc(g.concepto)}</b><div class="muted small">${esc(g.metodo || 'Efectivo')} · ${esc(socioName(g.por))}</div></td><td class="r num">${money(g.monto)}</td><td style="width:40px"><button class="btn ghost icon sm" data-gdel="${g.id}" title="Eliminar">${icon('trash')}</button></td></tr>`).join('')}</tbody>
           <tfoot><tr><td>Total gastos</td><td class="r num">${money(c.tGastos)}</td><td></td></tr></tfoot></table>` : `<div class="empty" style="padding:14px">Sin gastos.</div>`}</div></div>
         <div class="card"><div class="card-h"><h3>Vales de los socios</h3><button class="btn sm" id="addv">${icon('plus')} Vale</button></div><div class="card-b">
           ${c.vales.length ? `<table><tbody>${c.vales.map(v => `<tr><td><b>${esc(socioName(v.socioId))}</b><div class="muted small">${esc(v.concepto || 'Vale')}</div></td><td class="r num">${money(v.monto)}</td><td style="width:40px"><button class="btn ghost icon sm" data-vdel="${v.id}" title="Eliminar">${icon('trash')}</button></td></tr>`).join('')}</tbody></table>` : `<div class="empty" style="padding:14px">Sin vales.</div>`}</div></div>
-      </div>
-      <div class="grid g2 mt">
+      </div>` : ''}
+      <div class="grid ${puede('ganancias') ? 'g2' : ''} mt">
         <div class="card"><div class="card-h"><h3>Cuadre por método</h3></div><div class="card-b tbl-wrap"><table><thead><tr><th>Método</th><th class="r">Entró</th><th class="r">Salió</th><th class="r">Queda</th></tr></thead><tbody>
           ${c.porMetodo.map(x => `<tr><td><span class="row" style="gap:8px"><i style="width:10px;height:10px;border-radius:3px;background:${METODO_COLOR[x.m]}"></i>${x.m}</span></td><td class="r num">${money(x.inn)}</td><td class="r num muted">${x.out ? '− ' + money(x.out) : '—'}</td><td class="r num strong">${money(x.neto)}</td></tr>`).join('')}</tbody>
           <tfoot><tr><td>Total</td><td class="r num">${money(c.ingresos)}</td><td class="r num">− ${money(c.tGastos + c.vales.reduce((s, v) => s + num(v.monto), 0))}</td><td class="r num">${money(c.porMetodo.reduce((s, x) => s + x.neto, 0))}</td></tr></tfoot></table></div></div>
-        <div class="card"><div class="card-h"><h3>Ganancia por socio</h3><span class="sub">Ganancia ${money(c.utilidad)}</span></div><div class="card-b"><div class="grid g2 partner-grid" style="gap:12px">
+        ${!puede('ganancias') ? '' : `<div class="card"><div class="card-h"><h3>Ganancia por socio</h3><span class="sub">Ganancia ${money(c.utilidad)}</span></div><div class="card-b"><div class="grid g2 partner-grid" style="gap:12px">
           ${c.socios.map(s => `<div class="partner"><div class="row" style="gap:10px"><span class="avatar">${initials(s.nombre)}</span><b>${esc(s.nombre)}</b><span class="muted small" style="margin-left:auto">${s.pct}%</span></div>
             <div class="cash-sum mt-s small"><div class="line" style="padding:2px 0"><span class="muted">Su parte</span><span class="num">${money(s.parte)}</span></div><div class="line" style="padding:2px 0"><span class="muted">Vales</span><span class="num">− ${money(s.vales)}</span></div></div>
-            <div class="v num">${money(s.neto)}</div></div>`).join('')}</div></div></div>
+            <div class="v num">${money(s.neto)}</div></div>`).join('')}</div></div></div>`}
       </div>`;
   },
   bind(d) {
-    d = d || hoy();
+    d = puede('otrosDias') && d || hoy();
     const lock = cerrado(d);
     const guard = (motivo, cb) => lock ? dual(motivo + ` (caja del ${fdate(d)} cerrada)`, cb) : cb();
-    $('#cdate').onchange = e => go('#/caja/' + e.target.value);
+    $('#cdate') && ($('#cdate').onchange = e => go('#/caja/' + e.target.value));
     $$('[data-h]').forEach(r => r.onclick = () => go(r.dataset.h));
-    $('#addg').onclick = () => guard('Agregar gasto', () => gastoForm(d));
-    $('#addv').onclick = () => guard('Agregar vale', () => valeForm(d));
+    $('#addg') && ($('#addg').onclick = () => guard('Agregar gasto', () => gastoForm(d)));
+    $('#addv') && ($('#addv').onclick = () => guard('Agregar vale', () => valeForm(d)));
     $$('[data-gdel]').forEach(b => b.onclick = () => { const g = db.gastos.find(x => x.id === b.dataset.gdel); dual(`Eliminar gasto "${g.concepto}" de ${money(g.monto)}`, () => { db.gastos = db.gastos.filter(x => x !== g); save(); render(); }); });
     $$('[data-vdel]').forEach(b => b.onclick = () => { const v = db.vales.find(x => x.id === b.dataset.vdel); dual(`Eliminar vale de ${socioName(v.socioId)} por ${money(v.monto)}`, () => { db.vales = db.vales.filter(x => x !== v); save(); render(); }); });
     $('#close') && ($('#close').onclick = () => confirmBox(`¿Cerrar la caja del ${flong(d)}? Después, cualquier cambio en este día necesitará la clave de los dos socios.`, () => { db.cierres.push({ fecha: d, por: user, ts: Date.now() }); addLog('Cierre de caja ' + d); save(); toast('Caja cerrada'); render(); }, 'Cerrar caja'));
     $('#reopen') && ($('#reopen').onclick = () => dual(`Reabrir la caja del ${fdate(d)}`, () => { db.cierres = db.cierres.filter(x => x.fecha !== d); save(); render(); }));
-    $('#cprint').onclick = () => cajaCSV(d);
+    $('#cprint') && ($('#cprint').onclick = () => cajaCSV(d));
   },
 };
 function gastoForm(d) {
@@ -1526,7 +2320,7 @@ function gastoForm(d) {
 function valeForm(d) {
   modal({
     title: 'Registrar vale',
-    body: `<form id="vf" class="form"><label class="f">Socio<select class="inp" name="socioId">${db.config.socios.map(s => `<option value="${s.id}" ${s.id === user ? 'selected' : ''}>${esc(s.nombre)}</option>`).join('')}</select></label>
+    body: `<form id="vf" class="form"><label class="f">Socio<select class="inp" name="socioId">${autorizantes().map(s => `<option value="${s.id}" ${s.id === user ? 'selected' : ''}>${esc(s.nombre)}</option>`).join('')}</select></label>
       <label class="f">Monto<input class="inp" name="monto" inputmode="decimal" required></label><label class="f">Detalle <span class="hint">(opcional)</span><input class="inp" name="concepto"></label>
       <p class="hint" style="margin:0">El vale sale del efectivo y se descuenta de la ganancia de ese socio.</p></form>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="vf">Guardar</button>`,
@@ -1575,7 +2369,7 @@ const varillaDe = m => [m.varilla, m.colorCod].filter(Boolean).join(' ');
 const coloresDe = m => (m.colores || []).join(' / ') || m.color || '';
 const infoMontura = m => [[m.marca, m.modelo].filter(Boolean).join(' '), varillaDe(m) && 'varilla ' + varillaDe(m), coloresDe(m)].filter(Boolean).join(' · ');
 const descMontura = m => `${m.clase === 'sol' ? 'Lentes de sol' : 'Montura'} ${[m.marca, m.modelo, varillaDe(m)].filter(Boolean).join(' ')}${coloresDe(m) ? ' · ' + coloresDe(m) : ''} (${m.codigo})`;
-const chipStock = m => num(m.stock) <= 0 ? 'deuda' : num(m.stock) <= 1 ? 'pend' : 'plain';
+const chipStock = m => num(m.stock) <= 0 ? 'deuda' : 'plain';
 // "4321 C2" → varilla 4321, color de fábrica C2; si no son números se toma como marca.
 function varillaDeTexto(q) {
   const r = /^(\d{3,6})\s*(?:[-/]?\s*c\s*(\d{1,3}))?$/i.exec(String(q || '').trim());
@@ -1803,7 +2597,7 @@ function productoForm(p) {
     body: `<form id="pf" class="form"><label class="f">Nombre<input class="inp" name="nombre" required value="${esc(e.nombre)}" placeholder="Ej. Tornillos (unidad)"></label>
       <div class="fg"><label class="f">Grupo<input class="inp" name="grupo" list="pgrupos" required value="${esc(e.grupo)}"><datalist id="pgrupos">${grupos.map(g => `<option value="${esc(g)}">`).join('')}</datalist></label>
       <label class="f">Precio de venta<input class="inp" name="precio" inputmode="decimal" required value="${esc(e.precio)}"></label>
-      <label class="f">Costo <span class="hint">(lo que te cuesta a ti)</span><input class="inp" name="costo" inputmode="decimal" value="${esc(e.costo)}"></label>
+      ${puede('costos') ? `<label class="f">Costo <span class="hint">(lo que te cuesta a ti)</span><input class="inp" name="costo" inputmode="decimal" value="${esc(e.costo)}"></label>` : `<input type="hidden" name="costo" value="${esc(e.costo ?? '')}">`}
       <label class="f">Stock <span class="hint">(déjalo vacío si no llevas la cuenta)</span><input class="inp" name="stock" inputmode="numeric" value="${esc(e.stock)}"></label></div>
       <p class="hint" style="margin:0">Los productos del grupo “Extras de lunas” salen como opción al elegir las lunas en la venta. Agregar o cambiar precios pide la clave del dueño.</p></form>`,
     foot: `${p ? `<button class="btn danger" id="pdel" style="margin-right:auto">${icon('trash')}</button>` : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" form="pf">Guardar</button>`,
@@ -1827,20 +2621,123 @@ const dueno = () => socio(db.config.duenoId) || db.config.socios.find(s => /jorg
 const soyDueno = () => dueno()?.id === user;
 function pideDueno(motivo, cb) {
   const d = dueno();
-  if (!db.config.claveDueno) { if (soyDueno()) crearClaveDueno(cb); else toast(`Primero ${d.nombre} tiene que crear su clave de dueño`); return; }
+  if (!db.config.claveDueno && soyDueno()) { crearClaveDueno(cb); return; }
+  const sinClave = !db.config.claveDueno; // todavía no la creó: solo se le puede pedir aprobación
   modal({
     title: 'Clave del dueño',
     body: `<div class="lock-note">${icon('lock')}<div><b>${esc(motivo)}</b><br>Necesita la clave de dueño de ${esc(d.nombre)}.</div></div>
-      <div class="form"><label class="f">Clave de dueño<input class="inp pin" id="dpin" type="password" inputmode="numeric" autocomplete="off" maxlength="8"></label><div class="err" id="dperr"></div></div>`,
+      <div class="form"><label class="f" data-fila="${d.id}">${sinClave ? `<span class="muted small">${esc(d.nombre)} todavía no creó su clave de dueño.</span>` : `Clave de dueño<input class="inp pin" id="dpin" type="password" inputmode="numeric" autocomplete="off" maxlength="8">`}</label>${d.id === user ? '' : botonRemoto(d)}<div class="err" id="dperr"></div></div>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="dpok">${icon('unlock')} Continuar</button>`,
     onMount: bg => {
+      const listo = () => { closeModal(); remoto.usar(); addLog(motivo + remoto.texto(), [d.id]); save(); cb(); };
+      const remoto = esperarRemoto(bg, motivo, () => listo());
       const ok = () => {
+        if (remoto.ok.has(d.id)) return listo();
+        if (sinClave) { $('#dperr', bg).textContent = `Pídele aprobación a ${d.nombre}.`; return; }
         if (hashPin($('#dpin', bg).value) !== db.config.claveDueno) { $('#dperr', bg).textContent = 'Clave incorrecta'; $('#dpin', bg).select(); return; }
-        closeModal(); addLog(motivo, [d.id]); save(); cb();
+        listo();
       };
-      $('#dpok', bg).onclick = ok; $('#dpin', bg).addEventListener('keydown', ev => ev.key === 'Enter' && ok());
+      $('#dpok', bg).onclick = ok; $('#dpin', bg) && $('#dpin', bg).addEventListener('keydown', ev => ev.key === 'Enter' && ok());
     },
   });
+}
+// ---------- Aprobación a distancia ----------
+// Si quien tiene la clave no está en la tienda, se le pide por WhatsApp: abre el enlace, ve qué le piden y aprueba o rechaza.
+// Cada aprobación sirve una sola vez, para ese cambio, y se vence a los 30 minutos.
+const APROB_MIN = 30;
+const aprobacion = id => db.aprobaciones.find(a => a.id === id);
+const aprobVencida = a => Date.now() - a.ts > APROB_MIN * 6e4;
+const misAprobaciones = () => db.aprobaciones.filter(a => a.para === user && a.estado === 'pendiente' && !aprobVencida(a));
+const telefonoDe = s => s ? (s.telefono || (socioRol(s) === 'dueno' ? sesion.optica?.telefono || db.config.telefono : '')) : '';
+const botonRemoto = s => `<div class="remoto" data-rem="${s.id}"><span class="muted small">¿${esc(s.nombre.split(' ')[0])} no está?</span><button type="button" class="btn sm" data-pedir="${s.id}">${icon('wa')} Pedirle aprobación</button></div>`;
+function pedirAprobacion(motivo, para) {
+  const lim = Date.now() - 3 * 864e5; // los pedidos viejos se borran solos
+  db.aprobaciones.splice(0, db.aprobaciones.length, ...db.aprobaciones.filter(a => a.ts > lim));
+  const a = { id: uid(), motivo, pide: user, para, estado: 'pendiente', ts: Date.now() };
+  db.aprobaciones.push(a); save();
+  return a;
+}
+function waAprobacion(a) {
+  const s = socio(a.para), url = location.origin + location.pathname + '?aprobar=' + a.id;
+  const txt = `Hola ${s.nombre.split(' ')[0]}, ${me().nombre} te pide autorización en ${db.config.nombre || 'la óptica'} para: ${a.motivo}.\n\nToca aquí para aprobar o rechazar: ${url}`;
+  const tel = telefonoDe(s);
+  return tel ? waLink(tel, txt) : 'https://wa.me/?text=' + encodeURIComponent(txt);
+}
+// Maneja los botones "Pedirle aprobación" de una ventana de clave. alAprobar se llama cada vez que alguien aprueba.
+function esperarRemoto(bg, motivo, alAprobar) {
+  const pedidos = {}, ok = new Set();
+  let timer = null;
+  const pintar = (sid, html) => { const r = $(`[data-rem="${sid}"]`, bg); if (r) r.innerHTML = html; };
+  const otraVez = (sid, txt) => { delete pedidos[sid]; pintar(sid, `<span class="err" style="margin:0">${txt}</span><button type="button" class="btn sm" data-pedir="${sid}">Pedir otra vez</button>`); enlazar(); };
+  const revisar = () => {
+    if (!document.body.contains(bg)) { // se cerró la ventana sin terminar: los pedidos quedan cancelados
+      clearInterval(timer);
+      let hubo = false;
+      for (const sid in pedidos) { const a = aprobacion(pedidos[sid]); if (a && a.estado === 'pendiente') { a.estado = 'cancelada'; hubo = true; } }
+      if (hubo) save();
+      return;
+    }
+    for (const sid in pedidos) {
+      if (ok.has(sid)) continue;
+      const a = aprobacion(pedidos[sid]), n = esc(socioName(sid));
+      if (!a) continue;
+      if (a.estado === 'aprobada') {
+        ok.add(sid);
+        const f = $(`[data-fila="${sid}"]`, bg); if (f) f.hidden = true;
+        pintar(sid, `<span class="ok-note">${icon('check')} ${n} lo aprobó desde su celular</span>`);
+        alAprobar(sid);
+      } else if (a.estado === 'rechazada') otraVez(sid, `${n} rechazó el pedido.`);
+      else if (aprobVencida(a)) otraVez(sid, 'El pedido se venció.');
+    }
+  };
+  const enlazar = () => $$('[data-pedir]', bg).forEach(b => b.onclick = () => {
+    const sid = b.dataset.pedir, a = pedirAprobacion(motivo, sid), wa = waAprobacion(a);
+    pedidos[sid] = a.id;
+    window.open(wa, '_blank', 'noopener');
+    pintar(sid, `<span class="spin sm"></span><span class="grow small">Esperando que <b>${esc(socioName(sid))}</b> apruebe desde su celular…</span><a class="btn sm ghost" href="${wa}" target="_blank" rel="noopener">Reenviar</a>`);
+    if (!timer) timer = setInterval(revisar, 1000);
+  });
+  enlazar();
+  return {
+    ok,
+    // Al terminar, las aprobaciones quedan usadas (no sirven para otro cambio).
+    usar() { clearInterval(timer); for (const sid in pedidos) { const a = aprobacion(pedidos[sid]); if (a) a.estado = a.estado === 'aprobada' ? 'usada' : 'cancelada'; } save(); },
+    texto: () => ok.size ? ` (aprobado a distancia por ${[...ok].map(socioName).join(' y ')})` : '',
+  };
+}
+// Pantalla que abre quien aprueba (desde el enlace de WhatsApp o desde el aviso en la app).
+routes.aprobar = {
+  html(id) {
+    const a = aprobacion(id);
+    const caja = (t, cuerpo) => `<div class="page-head"><div><h1>${t}</h1></div></div><div class="card" style="max-width:560px"><div class="card-b">${cuerpo}</div></div>`;
+    const volver = `<div class="actions" style="margin-top:14px"><a class="btn" href="#/inicio">Ir al inicio</a></div>`;
+    if (!a) return caja('Pedido de autorización', `<p class="muted" style="margin:0">Este pedido ya no existe.</p>${volver}`);
+    if (a.para !== user) return caja('Pedido de autorización', `<p class="muted" style="margin:0">Este pedido es para <b>${esc(socioName(a.para))}</b>. Tiene que abrirlo con su usuario.</p>${volver}`);
+    const cuando = new Date(a.ts).toLocaleString('es-PE', { dateStyle: 'medium', timeStyle: 'short' });
+    const detalle = `<div class="lock-note">${icon('lock')}<div><b>${esc(a.motivo)}</b><br>Lo pide ${esc(socioName(a.pide))} · ${cuando}</div></div>`;
+    const estado = { aprobada: 'Ya lo aprobaste.', usada: 'Ya lo aprobaste y se hizo el cambio.', rechazada: 'Lo rechazaste.', cancelada: `${esc(socioName(a.pide))} canceló el pedido.` }[a.estado];
+    if (estado) return caja('Pedido de autorización', `${detalle}<p style="margin:0">${estado}</p>${volver}`);
+    if (aprobVencida(a)) return caja('Pedido de autorización', `${detalle}<p style="margin:0">Este pedido se venció (duran ${APROB_MIN} minutos). Si hace falta, que te lo pidan otra vez.</p>${volver}`);
+    return caja('Te piden autorización', `${detalle}
+      <p class="muted small" style="margin:0 0 14px">Si apruebas, se hace solo este cambio, una sola vez. Queda anotado que lo aprobaste tú.</p>
+      <div class="actions"><button class="btn danger" id="aprno">${icon('x')} Rechazar</button><button class="btn primary" id="aprsi">${icon('check')} Aprobar</button></div>`);
+  },
+  bind(id) {
+    const a = aprobacion(id); if (!a) return;
+    const responder = estado => {
+      if (a.estado !== 'pendiente' || aprobVencida(a)) return render();
+      Object.assign(a, { estado, resp: Date.now() });
+      addLog(`${estado === 'aprobada' ? 'Aprobó' : 'Rechazó'} a distancia: ${a.motivo} (lo pidió ${socioName(a.pide)})`);
+      save(); toast(estado === 'aprobada' ? 'Aprobado. Ya pueden continuar en la tienda.' : 'Pedido rechazado'); render();
+    };
+    $('#aprsi') && ($('#aprsi').onclick = () => responder('aprobada'));
+    $('#aprno') && ($('#aprno').onclick = () => responder('rechazada'));
+  },
+};
+// Aviso arriba de cualquier pantalla cuando alguien espera tu aprobación.
+function avisoAprobaciones(key) {
+  if (key === 'aprobar') return '';
+  return misAprobaciones().map(a => `<div class="plan-note warn">${icon('lock')}<div class="grow"><b>${esc(socioName(a.pide))} te pide autorización</b><br>${esc(a.motivo)}</div><a class="btn sm primary" href="#/aprobar/${a.id}">Ver</a></div>`).join('');
 }
 // La primera vez el dueño confirma con su clave de socio y elige su clave de dueño.
 function crearClaveDueno(cb, cambiar) {
@@ -1996,7 +2893,7 @@ routes.reportes = {
       </div>
       <div class="grid g3 mt">
         <div class="card"><div class="card-h"><h3>Marcas más vendidas</h3></div><div class="card-b">${topMarcas.length ? hbar(topMarcas) : `<div class="empty" style="padding:14px">Sin monturas vendidas.</div>`}</div></div>
-        <div class="card"><div class="card-h"><h3>Ventas por socio</h3></div><div class="card-b">${hbar(socios)}</div></div>
+        <div class="card"><div class="card-h"><h3>Ventas por persona</h3></div><div class="card-b">${hbar(socios)}</div></div>
         <div class="card"><div class="card-h"><h3>Datos rápidos</h3></div><div class="card-b"><div class="cash-sum">
           <div class="line"><span class="muted">Ventas</span><b class="num">${R.ords.length}</b></div>
           <div class="line"><span class="muted">Venta promedio</span><b class="num">${money(R.ords.length ? R.vendido / R.ords.length : 0)}</b></div>
@@ -2017,51 +2914,89 @@ routes.reportes = {
   },
 };
 
+// Dibujo de la montura según su forma, color y material (no hay fotos).
+const COLOR_MONT = { negro: '#1f2433', carey: '#8a5424', dorado: '#c39a2e', plateado: '#98a2b3', azul: '#2447c9', rosa: '#db5c9a', rosado: '#db5c9a', vino: '#8c1d3f', transparente: '#a9bad2', verde: '#1f6f52', blanco: '#c8ced9', gris: '#6b7280', marron: '#7a4a2a', rojo: '#c81e3a', amarillo: '#d4a514', naranja: '#e8742a', nude: '#d6a88c', jaspeado: '#8a6a4a', miel: '#c98a2e', morado: '#6d3bb8', celeste: '#4aa3df' };
+function monturaSVG(m) {
+  const cols = (m.colores && m.colores.length ? m.colores : [m.color || '']).map(c => sinTilde(String(c).split('/')[0].trim()));
+  const c = COLOR_MONT[cols[0]] || '#475569', c2 = COLOR_MONT[cols[1]] || c;
+  const mat = sinTilde(m.material || ''), fino = /metal|titanio|alumin/.test(mat), aire = /aire/i.test(m.aro || '');
+  const sol = m.clase === 'sol', fill = sol ? 'rgba(28,38,60,.78)' : 'rgba(190,220,255,.22)';
+  const f = sinTilde(m.forma || '');
+  const L = /redond/.test(f) ? '<circle cx="58" cy="50" r="30"/>' : /cuadr/.test(f) ? '<rect x="24" y="22" width="66" height="56" rx="15"/>'
+    : /avia/.test(f) ? '<path d="M24 28Q58 18 90 28Q94 58 76 74Q58 84 40 74Q22 60 24 28Z"/>' : /cat|gat/.test(f) ? '<path d="M16 26Q46 22 88 30Q94 52 80 68Q60 78 38 72Q22 64 20 46Q18 36 16 26Z"/>'
+    : /oval/.test(f) ? '<ellipse cx="57" cy="50" rx="36" ry="25"/>' : /hexa/.test(f) ? '<path d="M38 22H76L92 50L76 78H38L22 50Z"/>' : '<rect x="20" y="30" width="72" height="42" rx="11"/>';
+  const sw = aire ? 1.6 : fino ? 3.2 : 7;
+  return `<svg viewBox="0 0 200 100" aria-hidden="true"><g fill="none" stroke="${c2}" stroke-width="${fino ? 3 : 6}" stroke-linecap="round"><path d="M20 36 5 32M180 36l15-4"/><path d="M89 44Q100 34 111 44"/></g><g fill="${fill}" stroke="${c}" stroke-width="${sw}" stroke-linejoin="round" ${cols[0] === 'transparente' || aire ? 'stroke-opacity=".7"' : ''}>${L}<g transform="translate(200 0) scale(-1 1)">${L}</g></g><g fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity="${sol ? .5 : .8}"><path d="M36 40q6-9 16-10"/><path d="M128 40q6-9 16-10"/></g></svg>`;
+}
+let invFiltro = '', invVista = (() => { try { return localStorage.getItem('terra-inv-vista') || 'tarjetas'; } catch (e) { return 'tarjetas'; } })();
 routes.inventario = {
   html() {
-    const bajo = db.monturas.filter(m => num(m.stock) <= 1).length;
-    return `<div class="page-head"><div><h1>Inventario</h1><p>${db.monturas.filter(m => m.clase !== 'sol').length} monturas · ${((n) => `${n} ${n === 1 ? 'lente' : 'lentes'} de sol`)(db.monturas.filter(m => m.clase === 'sol').length)} ·${db.monturas.reduce((s, m) => s + Math.max(0, num(m.stock)), 0)} unidades${bajo ? ` · <span style="color:var(--danger)">${bajo} con stock bajo</span>` : ''}</p></div>
-      <div class="actions"><button class="btn" id="invpdf">${icon('down')} PDF para conteo</button>${invTab === 'monturas' ? `<button class="btn accent" id="ingreso">${icon('box')} Llegó mercadería</button>` : ''}<button class="btn primary" id="newi">${icon('plus')} ${{ monturas: 'Montura o lente de sol', cristales: 'Nueva lista', productos: 'Nuevo producto' }[invTab]}</button></div></div>
-      <div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="iseg">${[['monturas', 'Monturas y lentes de sol'], ['cristales', 'Precios de lunas'], ['productos', 'Accesorios y otros']].map(([k, t]) => `<button data-k="${k}" class="${invTab === k ? 'on' : ''}">${t}</button>`).join('')}</div>
-      <input class="inp" id="if" style="flex:1;min-width:200px" placeholder="${{ monturas: 'Buscar varilla, marca, sigla o código…', cristales: 'Buscar tipo de luna o tratamiento…', productos: 'Buscar accesorio: tornillo, plaquetas, estuche…' }[invTab]}"></div><div id="ilist"></div></div>`;
+    const M = db.monturas, sinSt = M.filter(m => num(m.stock) <= 0).length, unid = M.reduce((s, m) => s + Math.max(0, num(m.stock)), 0);
+    const P = accesorios(), pSin = P.filter(p => conStock(p) && num(p.stock) <= 0).length;
+    const stat = (t, v, st = '') => `<div class="stat"><small>${t}</small><b class="num" style="${st}">${v}</b></div>`;
+    const stats = invTab === 'productos'
+      ? stat('Productos', P.length) + stat('Con stock anotado', P.filter(conStock).length) + (puede('costos') ? stat('Valor a costo', money(P.filter(conStock).reduce((s, p) => s + num(p.costo) * Math.max(0, num(p.stock)), 0))) : '') + stat('Se acabaron', pSin, pSin ? 'color:var(--danger)' : '')
+      : invTab === 'monturas'
+        ? stat('Modelos', M.length) + stat('Unidades en tienda', unid) + (puede('costos') ? stat('Valor a costo', money(M.reduce((s, m) => s + num(m.costo) * Math.max(0, num(m.stock)), 0))) : '') + stat('Sin stock', sinSt, sinSt ? 'color:var(--danger)' : '')
+        : '';
+    return `<div class="page-head"><div><h1>Inventario</h1><p>${M.filter(m => m.clase !== 'sol').length} monturas · ${((n) => `${n} ${n === 1 ? 'lente' : 'lentes'} de sol`)(M.filter(m => m.clase === 'sol').length)} · ${unid} unidades · ${P.length} accesorios</p></div>
+      <div class="actions"><button class="btn" id="invpdf">${icon('down')} PDF para conteo</button>${invTab === 'monturas' ? `<button class="btn" id="ingreso">${icon('box')} Llegó mercadería</button>` : ''}<button class="btn primary" id="newi">${icon('plus')} ${{ monturas: 'Montura o lente de sol', cristales: 'Nueva lista', productos: 'Nuevo accesorio o pieza' }[invTab]}</button></div></div>
+      ${stats ? `<div class="stats">${stats}</div>` : ''}
+      <div class="seg inv-tabs" id="iseg">${[['monturas', 'Monturas y lentes de sol'], ['productos', 'Accesorios y piezas'], ['cristales', 'Precios de lunas']].map(([k, t]) => `<button data-k="${k}" class="${invTab === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+      <div class="inv-bar"><div class="search inv-q">${icon('search')}<input id="if" placeholder="${{ monturas: 'Buscar varilla, marca, sigla o código…', cristales: 'Buscar tipo de luna o tratamiento…', productos: 'Buscar accesorio: tornillo, plaquetas, estuche…' }[invTab]}" autocomplete="off"></div>
+        ${invTab === 'monturas' ? `<div class="seg" id="ivista">${[['tarjetas', 'Tarjetas'], ['lista', 'Lista']].map(([k, t]) => `<button data-v="${k}" class="${invVista === k ? 'on' : ''}">${t}</button>`).join('')}</div>` : ''}</div>
+      ${invTab === 'monturas' ? `<div class="fbar" id="ifil">${[['', 'Todas'], ['Dama', 'Dama'], ['Caballero', 'Caballero'], ['Unisex', 'Unisex'], ['Niño', 'Niño'], ['sol', 'Lentes de sol'], ['sin', 'Sin stock']].map(([k, t]) => `<button class="fch ${invFiltro === k ? 'on' : ''}" data-f="${k}">${t}</button>`).join('')}</div>` : ''}
+      <div id="ilist"></div>`;
   },
   bind() {
     const draw = () => {
       const f = sinTilde($('#if').value.trim());
       if (invTab === 'monturas') {
-        const l = f ? buscarMonturas(f) : db.monturas.slice().sort((a, b) => a.codigo.localeCompare(b.codigo, 'es', { numeric: true }));
-        $('#ilist').innerHTML = l.length ? `<div class="tbl-wrap"><table><thead><tr><th class="hide-sm">Código</th><th>Montura</th><th class="r">Precio</th><th class="c">Stock</th><th></th></tr></thead><tbody>
-          ${l.map(m => `<tr class="link" data-id="${m.id}"><td class="hide-sm"><span class="tag">${esc(m.codigo)}</span></td><td><b class="sigla">${esc(siglaMontura(m))}</b><div class="muted small"><span class="show-sm">${esc(m.codigo)} · </span>${esc(infoMontura(m))}</div></td><td class="r num">${money(m.precio)}</td>
-          <td class="c"><span class="chip ${chipStock(m)}">${m.stock}</span></td><td class="r"><button class="btn sm" data-add="${m.id}" title="Sumar unidades">${icon('plus')}<span class="hide-sm">Stock</span></button></td></tr>`).join('')}</tbody></table></div>` : `<div class="empty">${icon('box')}<div>No hay monturas.</div></div>`;
-        $$('#ilist [data-id]').forEach(r => r.onclick = e => { if (!e.target.closest('[data-add]')) monturaForm(db.monturas.find(x => x.id === r.dataset.id)); });
+        let l = f ? buscarMonturas(f) : db.monturas.slice().sort((a, b) => a.codigo.localeCompare(b.codigo, 'es', { numeric: true }));
+        if (invFiltro === 'sol') l = l.filter(m => m.clase === 'sol'); else if (invFiltro === 'sin') l = l.filter(m => num(m.stock) <= 0); else if (invFiltro) l = l.filter(m => m.genero === invFiltro);
+        const chip = m => num(m.stock) <= 0 ? `<span class="chip deuda">Sin stock</span>` : `<span class="chip plain">${m.stock} en stock</span>`;
+        $('#ilist').innerHTML = !l.length ? `<div class="card"><div class="empty">${icon('box')}<div>No hay monturas${f || invFiltro ? ' con ese filtro' : ''}.</div></div></div>`
+          : invVista === 'tarjetas' ? `<div class="fgrid">${l.map(m => `<div class="fcard link" data-id="${m.id}"><div class="fimg" style="--t:${COLOR_MONT[sinTilde(String((m.colores || [])[0] || '').trim())] || '#94a3b8'}"><div class="fb">${m.clase === 'sol' ? '<span class="chip plain">Sol</span>' : ''}</div>${monturaSVG(m)}</div>
+              <div class="fbody"><div class="row between" style="gap:6px"><span class="tag">${esc(m.codigo)}</span>${m.genero ? `<span class="muted small">${esc(m.genero)}</span>` : ''}</div><b class="sigla fsig">${esc(siglaMontura(m))}</b><span class="fmo">${esc(infoMontura(m))}</span>
+              <div class="ffoot"><b class="num">${money(m.precio)}</b>${chip(m)}<button class="btn sm icon" data-add="${m.id}" title="Sumar unidades">${icon('plus')}</button></div></div></div>`).join('')}</div>`
+          : `<div class="card"><div class="tbl-wrap"><table><thead><tr><th class="hide-sm">Código</th><th>Montura</th><th class="r">Precio</th><th class="c">Stock</th><th></th></tr></thead><tbody>
+            ${l.map(m => `<tr class="link" data-id="${m.id}"><td class="hide-sm"><span class="tag">${esc(m.codigo)}</span></td><td><b class="sigla">${esc(siglaMontura(m))}</b><div class="muted small"><span class="show-sm">${esc(m.codigo)} · </span>${esc(infoMontura(m))}</div></td><td class="r num">${money(m.precio)}</td>
+            <td class="c"><span class="chip ${chipStock(m)}">${m.stock}</span></td><td class="r"><button class="btn sm" data-add="${m.id}" title="Sumar unidades">${icon('plus')}<span class="hide-sm">Stock</span></button></td></tr>`).join('')}</tbody></table></div></div>`;
+        $$('#ilist [data-id]').forEach(r => r.onclick = e => { if (e.target.closest('[data-add]')) return; const m = db.monturas.find(x => x.id === r.dataset.id); puede('editarInventario') ? monturaForm(m) : stockForm(m); });
         $$('#ilist [data-add]').forEach(b => b.onclick = () => stockForm(db.monturas.find(x => x.id === b.dataset.add)));
       } else if (invTab === 'productos') {
         const ps = db.productos.filter(p => !f || sinTilde([p.nombre, p.grupo].join(' ')).includes(f));
         const grupos = [...new Set(ps.map(p => p.grupo))];
-        $('#ilist').innerHTML = ps.length ? `<div class="card-b" style="padding-top:4px">${grupos.map(g => `<h3 class="tgrupo">${esc(g)}</h3><div class="tbl-wrap"><table><thead><tr><th>Producto</th><th class="r">Costo</th><th class="r">Precio</th><th class="c">Stock</th></tr></thead><tbody>
-          ${ps.filter(p => p.grupo === g).map(p => `<tr class="link" data-id="${p.id}"><td><b>${esc(p.nombre)}</b></td><td class="r num muted">${String(p.costo ?? '') !== '' ? money(p.costo) : '—'}</td><td class="r num">${money(p.precio)}</td><td class="c">${conStock(p) ? `<span class="chip ${chipStock(p)}">${p.stock}</span>` : '<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table></div>`).join('')}
-          <p class="hint">Agregar productos o cambiar precios pide la clave del dueño. El stock es opcional.</p></div>` : `<div class="empty">No hay productos.</div>`;
+        const tarjeta = p => `<div class="pz ${conStock(p) && num(p.stock) <= 0 ? 'low' : ''}"><button class="grow pz-t" data-id="${p.id}"><b>${esc(p.nombre)}</b><span class="pzm"><span class="num strong">${money(p.precio)}</span>${puede('costos') && String(p.costo ?? '') !== '' ? `<span class="muted small">costo ${money(p.costo)}</span>` : ''}${conStock(p) && num(p.stock) <= 0 ? '<span class="chip deuda">Se acabó</span>' : ''}</span></button>
+          ${conStock(p) ? `<div class="pzstep"><button data-menos="${p.id}" aria-label="Restar uno" ${puede('editarInventario') ? '' : 'disabled'}>−</button><span class="num">${p.stock}</span><button data-mas="${p.id}" aria-label="Sumar uno">+</button></div>` : `<span class="chip plain" title="Este producto no lleva cuenta de stock">${/luna/i.test(p.grupo) ? 'Extra' : 'Sin stock anotado'}</span>`}</div>`;
+        $('#ilist').innerHTML = ps.length ? `${grupos.map(g => `<div class="pzg"><div class="pzh"><span class="tic" style="--c:${/luna/i.test(g) ? '#f59e0b' : '#0891b2'}">${icon(/luna/i.test(g) ? 'eye' : 'box')}</span><b>${esc(g)}</b><em>${ps.filter(p => p.grupo === g).length}</em></div><div class="pzgrid">${ps.filter(p => p.grupo === g).map(tarjeta).join('')}</div></div>`).join('')}
+          <p class="hint">Toca un producto para ver o cambiar su precio y su stock (pide la clave del dueño). Con + sumas lo que llegó.</p>` : `<div class="card"><div class="empty">No hay productos.</div></div>`;
         $$('#ilist [data-id]').forEach(r => r.onclick = () => productoForm(producto(r.dataset.id)));
+        $$('#ilist [data-mas]').forEach(b => b.onclick = () => { const p = producto(b.dataset.mas); p.stock = num(p.stock) + 1; addLog(`Sumó 1 a ${p.nombre} (queda ${p.stock})`); save(); draw(); });
+        $$('#ilist [data-menos]').forEach(b => b.onclick = () => { const p = producto(b.dataset.menos); if (num(p.stock) <= 0) return; p.stock = num(p.stock) - 1; addLog(`Restó 1 a ${p.nombre} (queda ${p.stock})`); save(); draw(); if (p.stock === 0) toast(`Se acabó: ${p.nombre}`); });
       } else {
+        $('#ilist').classList.add('card');
         const ts = db.tarifas.filter(t => !f || sinTilde([t.grupo, t.nombre, ...t.cols].join(' ')).includes(f));
         const l = db.cristales.filter(c => !f || sinTilde([c.nombre, c.tipo].join(' ')).includes(f));
         const tabla = t => `<div class="tarifa"><div class="row between" style="gap:8px"><b>${esc(t.nombre)}</b><button class="btn sm" data-edt="${t.id}">${icon('lock')} Editar</button></div>
           <div class="tbl-wrap"><table class="tprec"><thead><tr><th>Rango</th>${t.cols.map(c => `<th class="r">${esc(c)}</th>`).join('')}</tr></thead><tbody>
           ${t.filas.map(r => `<tr><td><b>${esc(r.rango)}</b>${conRango(r) ? `<div class="muted small">esf ±${n2r(r.esf)} · cil −${n2r(r.cil)}</div>` : ''}</td>${t.cols.map((_, j) => `<td class="r num">${num(r.precios[j]) ? money(r.precios[j]) : '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`;
         const grupos = [...new Set(ts.map(t => t.grupo))];
-        $('#ilist').innerHTML = `<div class="card-b" style="padding-top:4px">
+        $('#ilist').innerHTML = `<div class="card-b">
           <p class="muted small" style="margin:0 0 12px">En la venta el precio se pone solo según la medida del paciente: se toma el ojo con más esfera y más cilindro y se busca el primer rango que lo cubre. Cambiar precios pide la clave del dueño.</p>
           ${grupos.map(g => `<h3 class="tgrupo">${esc(g)}</h3>${ts.filter(t => t.grupo === g).map(tabla).join('')}`).join('') || (f ? '' : `<div class="empty">No hay listas de precios.</div>`)}
           <h3 class="tgrupo">Otros cristales (precio fijo)</h3>
           ${l.length ? `<div class="tbl-wrap"><table><thead><tr><th>Cristal</th><th class="hide-sm">Tipo</th><th class="r">Precio</th></tr></thead><tbody>
           ${l.map(c => `<tr class="link" data-id="${c.id}"><td><b>${esc(c.nombre)}</b></td><td class="hide-sm">${esc(c.tipo || '—')}</td><td class="r num">${money(c.precio)}</td></tr>`).join('')}</tbody></table></div>` : `<p class="muted small">No hay cristales de precio fijo.</p>`}
           <button class="btn sm mt-s" id="newc">${icon('plus')} Cristal de precio fijo</button></div>`;
-        $$('#ilist [data-id]').forEach(r => r.onclick = () => cristalForm(db.cristales.find(x => x.id === r.dataset.id)));
+        if (puede('editarInventario')) $$('#ilist [data-id]').forEach(r => r.onclick = () => cristalForm(db.cristales.find(x => x.id === r.dataset.id)));
         $$('#ilist [data-edt]').forEach(b => b.onclick = () => { const t = tarifa(b.dataset.edt); pideDueno(`Editar lista de precios "${t.nombre}"`, () => tarifaForm(t)); });
-        $('#newc').onclick = () => cristalForm();
+        $('#newc').hidden = !puede('editarInventario'); $('#newc').onclick = () => cristalForm();
       }
     };
     $$('#iseg button').forEach(b => b.onclick = () => { invTab = b.dataset.k; render(); });
+    $$('#ivista button').forEach(b => b.onclick = () => { invVista = b.dataset.v; try { localStorage.setItem('terra-inv-vista', invVista); } catch (e) { } render(); });
+    $$('#ifil [data-f]').forEach(b => b.onclick = () => { invFiltro = b.dataset.f; $$('#ifil [data-f]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
     $('#if').oninput = draw; draw();
     $('#newi').onclick = () => invTab === 'monturas' ? monturaForm() : invTab === 'productos' ? productoForm() : pideDueno('Crear una lista de precios de lunas', () => tarifaForm());
     $('#ingreso') && ($('#ingreso').onclick = () => ingresoForm());
@@ -2094,7 +3029,7 @@ function stockForm(m, cant = 1) {
       <div class="row"><span class="tag">${esc(m.codigo)}</span><div><b class="sigla">${esc(siglaMontura(m))}</b><div class="muted small">${esc(infoMontura(m))} · ${money(m.precio)}</div></div></div>
       <div class="row between"><span class="muted">Stock actual</span><b class="num" style="font-size:20px">${m.stock}</b></div>
       <label class="f">Unidades que llegaron<input class="inp" name="cant" inputmode="numeric" value="${cant}" required></label>
-      <label class="f">Costo por unidad <span class="hint">(opcional)</span><input class="inp" name="costo" inputmode="decimal" value="${esc(m.costo || '')}"></label>
+      ${puede('costos') ? `<label class="f">Costo por unidad <span class="hint">(opcional)</span><input class="inp" name="costo" inputmode="decimal" value="${esc(m.costo || '')}"></label>` : ''}
       <div class="row between"><span class="muted">Quedará en</span><b class="num" id="stnew" style="font-size:20px">${num(m.stock) + cant}</b></div></form>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="stf">${icon('check')} Sumar al stock</button>`,
     onMount: bg => {
@@ -2131,10 +3066,10 @@ function monturaForm(m, pre) {
       <div class="fg fg3"><label class="f">Modelo o nombre <span class="hint">(opcional)</span><input class="inp" name="modelo" value="${esc(e.modelo)}"></label>
         <label class="f">Código interno<input class="inp up" name="codigo" required value="${esc(e.codigo)}"></label>
         <label class="f">Precio de venta<input class="inp" name="precio" inputmode="decimal" required value="${esc(e.precio)}"></label>
-        <label class="f">Costo <span class="hint">(opcional)</span><input class="inp" name="costo" inputmode="decimal" value="${esc(e.costo)}"></label>
+        ${puede('costos') ? `<label class="f">Costo <span class="hint">(opcional)</span><input class="inp" name="costo" inputmode="decimal" value="${esc(e.costo)}"></label>` : `<input type="hidden" name="costo" value="${esc(e.costo ?? '')}">`}
         <label class="f">Stock<input class="inp" name="stock" inputmode="numeric" value="${esc(e.stock)}"></label></div>
       ${m ? `<p class="hint" style="margin:0">${icon('lock', '').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"')} Cambiar el precio pide la clave de los dos socios.</p>` : ''}</form>`,
-    foot: `${m ? `<button class="btn danger" id="mdel" style="margin-right:auto">${icon('trash')}</button>` : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" form="mf">Guardar</button>`,
+    foot: `${m && puede('editarInventario') ? `<button class="btn danger" id="mdel" style="margin-right:auto">${icon('trash')}</button>` : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" form="mf">Guardar</button>`,
     onMount: bg => {
       const form = $('#mf', bg), campo = n => form.elements[n];
       const estado = () => {
@@ -2291,7 +3226,7 @@ routes.ajustes = {
           <button class="btn primary">${icon('unlock')} Abrir Ajustes</button></form>`
         : soyDueno() ? `<p class="muted small" style="margin-top:0">Todavía no tienes clave de dueño. Créala ahora: con ella se abre Ajustes y se cambia la lista de precios.</p><button class="btn primary" id="ajcrear">${icon('lock')} Crear mi clave de dueño</button>`
           : `<p class="muted small" style="margin:0">${esc(d.nombre)} tiene que entrar con su usuario y crear su clave de dueño.</p>`}</div></div>`;
-    return `<div class="page-head"><div><h1>Ajustes</h1><p>Datos de la óptica, socios y respaldo.</p></div><div class="actions"><button class="btn" id="ajlock">${icon('lock')} Cerrar Ajustes</button></div></div>
+    return `<div class="page-head"><div><h1>Ajustes</h1><p>Datos de la óptica, personas y respaldo.</p></div><div class="actions"><button class="btn" id="ajlock">${icon('lock')} Cerrar Ajustes</button></div></div>
       <div class="grid g2">
         <div class="card"><div class="card-h"><h3>Datos de la óptica</h3></div><div class="card-b"><form id="cfg" class="form">
           <label class="f">Nombre<input class="inp" name="nombre" value="${esc(c.nombre)}" required></label>
@@ -2335,18 +3270,27 @@ routes.ajustes = {
           ${ABREV_GRUPOS.map(([g, t]) => `<div class="fld">${t}<div class="abl" data-g="${g}">${abrev()[g].map(([n, a]) => filaAbrev(n, a)).join('')}</div><div><button type="button" class="btn sm ghost" data-addab="${g}">${icon('plus')} Agregar</button></div></div>`).join('')}
           <p class="hint" style="margin:0">Si cambias una sigla, se actualiza en todas las monturas. Si cambias un nombre, las monturas que ya tenían el nombre anterior lo conservan.</p>
           <div class="actions"><button class="btn primary">Guardar siglas</button><button type="button" class="btn ghost" id="abreset">Volver a las siglas iniciales</button></div></form></div></div>
-        <div class="card"><div class="card-h"><h3>Socios</h3></div><div class="card-b">
-          ${c.socios.map(s => `<div class="row between" style="padding:10px 0;border-bottom:1px solid var(--line-2)"><div class="row"><span class="avatar">${initials(s.nombre)}</span><div><b>${esc(s.nombre)}</b><div class="muted small">${s.pct}% de la ganancia</div></div></div><button class="btn sm" data-s="${s.id}">Editar</button></div>`).join('')}
-          <p class="hint">Cambiar nombres, porcentajes o claves pide la clave de ambos socios.</p></div></div>
+        <div class="card"><div class="card-h"><div><h3>Personas y permisos</h3><div class="sub">Cada una entra con su propio usuario y contraseña.</div></div><button class="btn sm primary" id="padd">${icon('plus')} Agregar</button></div><div class="card-b">
+          ${activos().map(s => { const u = socioRol(s) === 'dueno' ? sesion.perfil?.usuario || s.usuario || sesion.usuario?.email : s.usuario; return `<div class="row between" style="padding:10px 0;border-bottom:1px solid var(--line-2)"><div class="row"><span class="avatar">${initials(s.nombre)}</span><div><b>${esc(s.nombre)}</b><div class="muted small">${ROLES[socioRol(s)]}${socioRol(s) === 'vendedor' ? '' : ` · ${s.pct}% de la ganancia`} · ${u ? 'usuario ' + esc(u) : '<span style="color:var(--danger)">sin usuario</span>'}</div></div></div><button class="btn sm" data-per="${s.id}">${u ? 'Editar' : 'Crear usuario'}</button></div>`; }).join('')}
+          <p class="hint"><b>Dueño:</b> todo. <b>Socio:</b> todo menos Ajustes (personas, datos de la óptica, lista de precios y respaldos). <b>Vendedor:</b> pacientes, ventas, cobros, caja del día y agregar mercadería; no ve costos, ganancias ni reportes, y no da descuentos.</p></div></div>
         <div class="card"><div class="card-h"><h3>Clave del dueño</h3></div><div class="card-b">
           <p class="muted small" style="margin-top:0">Es de <b>${esc(d.nombre)}</b>. Abre Ajustes y permite cambiar la lista de precios de lunas. Solo se cambia sabiendo la clave actual.</p>
           <button class="btn" id="cdcambiar">${icon('lock')} Cambiar clave de dueño</button></div></div>
+        <div class="card"><div class="card-h"><h3>Cuenta TerraÓptica</h3></div><div class="card-b">
+          <div class="cash-sum"><div class="line"><span>Tu usuario</span><b>${esc(sesion.perfil?.usuario || sesion.usuario?.email || '')}</b></div>
+          <div class="line"><span>Plan</span><b>${esc(avisoPlan().corto)}</b></div></div>
+          <p class="muted small">Con tu usuario y tu contraseña entras a la óptica desde cualquier celular, tablet o computadora. Si la olvidas, en la pantalla de entrada toca "Olvidé mi clave".</p>
+          <div class="actions"><a class="btn" href="${waSoporte('Hola, tengo una consulta sobre TerraÓptica (' + (c.nombre || '') + ').')}" target="_blank" rel="noopener">${icon('wa')} Escribir a soporte</a>
+          <button class="btn" id="csalir3">${icon('logout')} Cerrar sesión en este equipo</button></div></div></div>
         <div class="card"><div class="card-h"><h3>Respaldo de datos</h3></div><div class="card-b">
-          <p class="muted small" style="margin-top:0">Los datos se guardan en este equipo. Descarga un respaldo cada semana (o guárdalo en Google Drive) para no perder nada.</p>
+          <p class="muted small" style="margin-top:0">Tus datos se guardan en la nube de TerraÓptica y quedan copiados en cada equipo. Igual puedes descargar una copia cuando quieras.</p>
           <div class="actions"><button class="btn primary" id="exp">${icon('down')} Descargar respaldo</button><label class="btn">${icon('up')} Restaurar respaldo<input type="file" id="imp" accept=".json,.txt,application/json,text/plain" hidden></label></div>
           ${c.ultimoRespaldo ? `<p class="hint">Último respaldo: ${new Date(c.ultimoRespaldo).toLocaleString('es-PE')}</p>` : ''}
           <div style="border-top:1px solid var(--line-2);margin-top:16px;padding-top:14px"><b class="small">¿Terminaste de probar?</b><p class="muted small" style="margin:4px 0 10px">Borra los datos de ejemplo y empieza con tus pacientes reales. Pide la clave de ambos socios.</p>
           <button class="btn danger" id="reset">${icon('trash')} Empezar de cero</button></div></div></div>
+        ${hayDatosCelular() ? `<div class="card"><div class="card-h"><h3>Datos de Glooptic en este celular</h3></div><div class="card-b">
+          <p class="muted small" style="margin-top:0">Este celular todavía guarda los datos del sistema anterior. ${(e => e && e.como === 'si' ? `Ya se subieron a la nube el ${new Date(e.ts).toLocaleString('es-PE', { dateStyle: 'medium', timeStyle: 'short' })}.` : 'Todavía no se subieron a la nube.')(estadoSubida(sesion.optica.id))} Puedes revisar si falta algo: solo se suma lo que no está.</p>
+          <div class="actions"><button class="btn" id="subcel">${icon('up')} Revisar y subir</button></div></div></div>` : ''}
         <div class="card"><div class="card-h"><h3>Cambios autorizados</h3><span class="sub">Últimos 20</span></div><div class="card-b" style="padding-top:8px">
           ${db.log.length ? db.log.slice(0, 20).map(l => `<div style="padding:8px 0;border-bottom:1px solid var(--line-2)"><div class="small"><b>${esc(l.accion)}</b></div><div class="muted small">${new Date(l.ts).toLocaleString('es-PE', { dateStyle: 'medium', timeStyle: 'short' })} · ${esc(socioName(l.por))}${l.autoriza ? (l.autoriza.length > 1 ? ' · autorizado por ambos' : ' · con clave del dueño') : ''}</div></div>`).join('') : `<div class="empty" style="padding:14px">Sin registros.</div>`}</div></div>
         <div class="card"><div class="card-h"><h3>Ventas anuladas</h3><span class="sub">Quedan guardadas con sus pagos</span></div><div class="card-b" style="padding-top:8px">
@@ -2368,7 +3312,8 @@ routes.ajustes = {
     $('#ajlock').onclick = () => { ajustesAbierto = false; render(); };
     $('#cdcambiar').onclick = () => crearClaveDueno(null, true);
     $('#cfg').onsubmit = e => { e.preventDefault(); const f = readForm(e.target); Object.assign(db.config, f, { recordatorioMeses: num(f.recordatorioMeses) || 12 }); save(); toast('Datos guardados'); render(); };
-    $$('[data-s]').forEach(b => b.onclick = () => dual('Editar datos de socio', () => socioForm(socio(b.dataset.s))));
+    $$('[data-per]').forEach(b => b.onclick = () => personaForm(socio(b.dataset.per)));
+    $('#padd').onclick = () => personaForm();
     $('#factf').onsubmit = e => {
       e.preventDefault();
       const f = readForm(e.target), F = fact();
@@ -2404,34 +3349,98 @@ routes.ajustes = {
       try { saveFile(`Prueba ${TIPOS_CP[c.tipo]}.pdf`, await comprobantePDF(c)); } catch (err) { toast('No se pudo generar el PDF: ' + err.message); }
     };
     $('#exp').onclick = descargarRespaldo;
+    $('#subcel') && ($('#subcel').onclick = () => ofrecerSubida(true));
+    $('#csalir3').onclick = salirDeCuenta;
     $('#reset').onclick = () => dual('Borrar pacientes, órdenes, caja e inventario (se conservan los socios, los datos de la óptica y las listas de precios)', () => {
-      const cfg = { ...db.config, nextOrden: 1, nextMontura: 1, fact: { ...db.config.fact, numB: 1, numF: 1 } }, tar = db.tarifas, prod = db.productos; db = blank(); db.config = cfg; db.tarifas = tar; db.productos = prod; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
+      const cfg = { ...db.config, nextOrden: 1, nextMontura: 1, fact: { ...db.config.fact, numB: 1, numF: 1 } }, tar = db.tarifas, prod = db.productos; db = blank(); db.config = cfg; db.tarifas = tar; db.productos = prod; permitirBorrado = true; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
     });
     $('#imp').onchange = e => {
       const file = e.target.files[0]; if (!file) return;
       file.text().then(t => {
         let data; try { data = JSON.parse(t); if (!data.config || !data.pacientes) throw 0; } catch (err) { toast('El archivo no es un respaldo válido'); return; }
-        dual(`Restaurar respaldo (${data.pacientes.length} pacientes, ${data.ordenes.length} órdenes). Se reemplazan los datos actuales.`, () => { db = normDb(Object.assign(blank(), data)); save(); toast('Respaldo restaurado'); render(); });
+        dual(`Restaurar respaldo (${data.pacientes.length} pacientes, ${data.ordenes.length} órdenes). Se reemplazan los datos actuales.`, () => { db = normDb(Object.assign(blank(), data)); permitirBorrado = true; save(); toast('Respaldo restaurado'); render(); });
       });
     };
   },
 };
 const filaAbrev = (n, a) => `<div class="abr"><input class="inp sm" data-n value="${esc(n)}" placeholder="Nombre" aria-label="Nombre"><input class="inp sm up" data-a value="${esc(a)}" placeholder="Sigla" maxlength="5" aria-label="Sigla"><button type="button" class="btn ghost icon sm" data-delab aria-label="Quitar">${icon('x')}</button></div>`;
-function socioForm(s) {
+// Agregar o editar una persona, con su usuario y contraseña. Solo el dueño entra aquí (Ajustes).
+// El porcentaje de ganancia que no tienen los socios queda para el dueño.
+function personaForm(s) {
+  const esD = s && s.id === dueno().id;
+  let rol = s ? socioRol(s) : 'vendedor', cambiarClave = false;
+  const conUsuario = !!(s && s.usuario);
   modal({
-    title: 'Editar socio',
-    body: `<form id="sf" class="form"><label class="f">Nombre<input class="inp" name="nombre" value="${esc(s.nombre)}" required></label>
-      <label class="f">Porcentaje de la ganancia<input class="inp" name="pct" inputmode="decimal" value="${s.pct}"></label>
-      <label class="f">Nueva clave <span class="hint">(dejar vacío para no cambiar)</span><input class="inp" name="pin" type="password" inputmode="numeric" minlength="4" maxlength="8"></label></form>`,
-    foot: `<button class="btn" data-close>Cancelar</button><button class="btn primary" form="sf">Guardar</button>`,
+    title: s ? 'Editar ' + esc(s.nombre) : 'Agregar persona',
+    body: `<form id="pf2" class="form" autocomplete="off"><label class="f">Nombre<input class="inp" name="nombre" value="${esc(s?.nombre || '')}" required maxlength="40"></label>
+      <label class="f">Celular (WhatsApp) <span class="hint">(para pedirle aprobación cuando no esté en la tienda)</span><input class="inp" name="telefono" inputmode="tel" value="${esc(s?.telefono || (esD ? sesion.optica?.telefono || '' : ''))}" maxlength="20"></label>
+      ${esD ? `<p class="muted small" style="margin:0">Rol: <b>Dueño</b>. Puede hacer todo en el sistema. Entras con tu usuario <b>${esc(sesion.perfil?.usuario || '')}</b>.</p>` : `<div class="fld">Rol<div class="seg" id="prol"><button type="button" data-r="socio">Socio</button><button type="button" data-r="vendedor">Vendedor</button></div><div class="hint" id="prolh"></div></div>`}
+      ${esD ? '' : `<label class="f" id="ppct">Porcentaje de la ganancia <span class="hint">(lo que falta para 100% queda para el dueño)</span><input class="inp" name="pct" inputmode="decimal" value="${s && socioRol(s) === 'socio' ? s.pct : ''}"></label>`}
+      ${esD ? '' : conUsuario ? `<div class="fld">Usuario para entrar<div class="row between"><b>${esc(s.usuario)}</b><button type="button" class="btn sm" id="pnueva">Poner contraseña nueva</button></div>
+          <label class="f" id="pclavebox" hidden>Contraseña nueva<input class="inp" name="clave" minlength="6" spellcheck="false" placeholder="Mínimo 6 caracteres"></label></div>`
+        : `<div class="fg"><label class="f">Usuario para entrar<input class="inp" name="usuario" required minlength="3" maxlength="30" pattern="[A-Za-z0-9._\-]+" autocapitalize="none" spellcheck="false" placeholder="Ej. juan.perez"></label>
+          <label class="f">Contraseña<input class="inp" name="clave" required minlength="6" spellcheck="false" placeholder="Mínimo 6 caracteres"></label></div>`}
+      <label class="f" id="ppin">${s && s.pin ? 'Nueva clave de autorización <span class="hint">(vacía = no cambiar)</span>' : 'Clave de autorización <span class="hint">(opcional: si la dejas vacía, la crea él al entrar)</span>'}<input class="inp" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" placeholder="4 a 8 números"></label>
+      <div class="err" id="pferr"></div></form>`,
+    foot: `${s && !esD ? `<button class="btn danger" id="pbaja" style="margin-right:auto">${icon('trash')} Quitar acceso</button>` : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" form="pf2" id="pfok">Guardar</button>`,
     onMount: bg => {
-      $('#sf', bg).onsubmit = e => {
-        e.preventDefault(); const f = readForm(e.target);
-        s.nombre = f.nombre; s.pct = num(f.pct); if (f.pin) s.pin = hashPin(f.pin);
-        const other = db.config.socios.find(x => x !== s); if (other) other.pct = round2(100 - s.pct);
-        save(); closeModal(); toast('Socio actualizado'); render();
+      const pintar = () => {
+        $$('#prol button', bg).forEach(b => b.classList.toggle('on', b.dataset.r === rol));
+        $('#ppct', bg) && ($('#ppct', bg).hidden = rol !== 'socio');
+        $('#ppin', bg).hidden = !esD && rol === 'vendedor';
+        $('#prolh', bg) && ($('#prolh', bg).textContent = rol === 'socio' ? 'Todo menos Ajustes. Autoriza cambios delicados con su clave y recibe su parte de la ganancia.' : 'Pacientes, ventas, cobros, caja del día y agregar mercadería. No ve costos, ganancias ni reportes, y no da descuentos.');
       };
+      $$('#prol button', bg).forEach(b => b.onclick = () => { rol = b.dataset.r; pintar(); });
+      $('#pnueva', bg) && ($('#pnueva', bg).onclick = () => { cambiarClave = true; $('#pclavebox', bg).hidden = false; $('#pnueva', bg).hidden = true; $('[name=clave]', bg).required = true; $('[name=clave]', bg).focus(); });
+      pintar();
+      const repartir = (quien, pct) => {
+        const otros = autorizantes().filter(x => x.id !== dueno().id && x !== quien).reduce((t, x) => t + num(x.pct), 0);
+        return round2(100 - otros - pct);
+      };
+      $('#pf2', bg).onsubmit = async e => {
+        e.preventDefault();
+        const f = readForm(e.target), err = t => { $('#pferr', bg).textContent = t; }, btn = $('#pfok', bg);
+        if (activos().some(x => x !== s && x.nombre.toLowerCase() === f.nombre.toLowerCase())) return err('Ya hay otra persona con ese nombre.');
+        const r = esD ? 'dueno' : rol, pct = r === 'socio' ? num(f.pct) : 0;
+        const resto = esD ? null : repartir(s, pct);
+        if (resto !== null && resto < 0) return err('Los porcentajes de los socios pasan del 100%.');
+        const p = s || { id: uid() };
+        // Primero se crea (o se renueva) su usuario en la nube; si falla, no se guarda nada.
+        let acceso = null;
+        if (!esD && (!conUsuario || cambiarClave)) {
+          btn.disabled = true; btn.textContent = 'Creando usuario…'; err('');
+          try {
+            if (conUsuario) await Nube.quitarAcceso({ uid: s.uid, usuario: s.usuario });
+            acceso = await Nube.crearAcceso({ opticaId: sesion.optica.id, usuario: conUsuario ? s.usuario : f.usuario, clave: f.clave, nombre: f.nombre, rol: r, personaId: p.id });
+          } catch (x) { btn.disabled = false; btn.textContent = 'Guardar'; return err(Nube.mensaje(x)); }
+          Object.assign(p, { uid: acceso.uid, usuario: acceso.usuario });
+        }
+        Object.assign(p, { nombre: f.nombre, rol: r, pct: esD ? p.pct : pct, telefono: (f.telefono || '').trim() });
+        if (f.pin && r !== 'vendedor') p.pin = hashPin(f.pin);
+        if (!s) db.config.socios.push(p);
+        if (resto !== null) dueno().pct = resto;
+        addLog(`${!s ? 'Persona agregada' : acceso && conUsuario ? 'Contraseña nueva' : acceso ? 'Usuario creado' : 'Datos actualizados'}: ${p.nombre} (${ROLES[r]})`);
+        save(); closeModal(); render();
+        if (acceso) datosAccesoModal(p, f.clave); else toast('Datos guardados');
+      };
+      $('#pbaja', bg) && ($('#pbaja', bg).onclick = () => confirmBox(`¿Quitarle el acceso a <b>${esc(s.nombre)}</b>? Ya no podrá entrar desde ningún equipo. Sus ventas y registros se conservan.`, async () => {
+        if (s.usuario) { try { await Nube.quitarAcceso({ uid: s.uid, usuario: s.usuario }); } catch (x) { toast('No se pudo quitar el acceso: ' + Nube.mensaje(x)); return; } }
+        s.baja = true; s.pct = 0; dueno().pct = repartir(s, 0);
+        addLog(`Acceso quitado: ${s.nombre}`); save(); toast(`${s.nombre} ya no puede entrar`); render();
+      }, 'Quitar acceso'));
     },
+  });
+}
+// Datos para pasarle a la persona: dónde entrar, su usuario y su contraseña.
+function datosAccesoModal(p, clave) {
+  const url = location.origin + location.pathname.replace(/[^/]*$/, '');
+  const txt = `Hola ${p.nombre.split(' ')[0]}, ya tienes tu usuario para ${db.config.nombre || 'la óptica'}. Entra a ${url} con tu usuario ${p.usuario} y la contraseña ${clave}.`;
+  modal({
+    title: 'Usuario listo',
+    body: `<p style="margin:0 0 12px"><b>${esc(p.nombre)}</b> ya puede entrar con su propio usuario.</p>
+      <div class="cash-sum"><div class="line"><span>Dirección</span><b>${esc(url)}</b></div><div class="line"><span>Usuario</span><b>${esc(p.usuario)}</b></div><div class="line"><span>Contraseña</span><b>${esc(clave)}</b></div></div>
+      <p class="hint">La contraseña no queda guardada en el sistema: pásasela ahora. Si la olvida, aquí mismo le pones una nueva.</p>`,
+    foot: `<button class="btn" data-close>Cerrar</button><a class="btn wa" href="https://wa.me/?text=${encodeURIComponent(txt)}" target="_blank" rel="noopener">${icon('wa')} Enviar por WhatsApp</a>`,
   });
 }
 
@@ -2492,20 +3501,20 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.24.1';
+const APP_VERSION = '2026.09.24.2';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
     const v = (await (await fetch('version.txt?t=' + Date.now(), { cache: 'no-store' })).text()).trim();
-    if (v && v !== APP_VERSION && !$('.modal-bg')) location.reload();
+    if (v && v !== APP_VERSION && !$('.modal-bg')) { subir(); setTimeout(() => location.reload(), 500); }
   } catch (e) { }
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') buscarActualizacion(); });
 setInterval(buscarActualizacion, 15 * 60 * 1000);
 
 render();
-logoInicial();
-// Pide al navegador que no borre estos datos por su cuenta cuando falte espacio.
+if (window.Nube) arrancarNube(); else addEventListener('nube-lista', arrancarNube, { once: true });
+// Pide al navegador que no borre la copia local por su cuenta cuando falte espacio.
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist().catch(() => { }); } catch (e) { }
 
 // Instalable en el teléfono/tablet y funciona sin internet (solo cuando se sirve por https o localhost).
