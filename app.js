@@ -1635,7 +1635,11 @@ routes['nueva-orden'] = {
     });
     // Lunas: el rango (y el precio) sale de la medida elegida; se puede cambiar a mano.
     const medidaSel = () => db.medidas.find(m => m.id === draft.medidaId);
-    let tSel = null, fSel = null, reflejo = '', colBuscada = -1;
+    let tSel = null, fSel = null, reflejo = '', colorFF = '', colBuscada = -1;
+    // Foto Free: se elige el color (púrpura, rosado, celeste, verde). Blue: se elige el reflejo del AR (azul o verde).
+    const esFF = c => /foto\s*-?\s*free/i.test(c), esBlue = c => /blue/i.test(c) && !esFF(c);
+    const extraLuna = c => esFF(c) ? (colorFF ? ' · color ' + colorFF : '') : esBlue(c) && reflejo ? ' · reflejo ' + reflejo : '';
+    const segOpc = (id, tit, val, ops) => `<div class="lrefl"><span class="small strong">${tit}</span><div class="seg" id="${id}">${[['', 'Sin especificar'], ...ops.map(o => [o, o[0].toUpperCase() + o.slice(1)])].map(([k, x]) => `<button type="button" data-r="${k}" class="${val === k ? 'on' : ''}">${x}</button>`).join('')}</div></div>`;
     const panel = () => {
       const box = $('#lpanel'), t = tSel;
       if (!t) { box.innerHTML = ''; return; }
@@ -1651,7 +1655,8 @@ routes['nueva-orden'] = {
           ${t.cols.map((_, j) => { const pr = precioTarifa(t, i, j); return pr ? `<td><button type="button" data-f="${i}" data-j="${j}" class="${j === colBuscada ? 'hl' : ''}"><small>${esc(t.cols[j])}</small>${money(pr)}</button></td>` : '<td class="nop"><span class="muted">—</span></td>'; }).join('')}</tr>`).join('')}</tbody></table></div>`;
       box.innerHTML = `<div class="lpanel"><b>${esc(t.nombre)}</b>
         <div class="small muted">${aviso}</div>
-        <div class="lrefl"><span class="small strong">Reflejo del AR:</span><div class="seg" id="lrefl">${[['', 'Sin especificar'], ['azul', 'Azul'], ['verde', 'Verde']].map(([k, x]) => `<button type="button" data-r="${k}" class="${reflejo === k ? 'on' : ''}">${x}</button>`).join('')}</div></div>
+        ${t.cols.some(esBlue) ? segOpc('lrefl', 'Reflejo del Blue:', reflejo, ['azul', 'verde']) : ''}
+        ${t.cols.some(esFF) ? segOpc('lff', 'Color del Foto Free:', colorFF, ['púrpura', 'rosado', 'celeste', 'verde']) : ''}
         ${tabla}
         ${extrasLuna().length ? `<div class="fld">Extras<div class="pick" id="lext">${extrasLuna().map(p => `<button type="button" data-p="${p.id}">${icon('plus')} ${esc(p.nombre)} <small>${money(p.precio)}</small></button>`).join('')}</div></div>
         <div class="lcolor" id="lcolor" hidden><div class="seg" id="lctipo"><button type="button" data-t="completo" class="on">Completo</button><button type="button" data-t="degradado">Degradado</button></div>
@@ -1673,9 +1678,10 @@ routes['nueva-orden'] = {
         $('#lcolor').hidden = true; toast('Color agregado: ' + desc);
       });
       $$('#lrefl [data-r]').forEach(b => b.onclick = () => { reflejo = b.dataset.r; $$('#lrefl [data-r]').forEach(x => x.classList.toggle('on', x === b)); });
+      $$('#lff [data-r]').forEach(b => b.onclick = () => { colorFF = b.dataset.r; $$('#lff [data-r]').forEach(x => x.classList.toggle('on', x === b)); });
       $$('.lmat [data-j]').forEach(b => b.onclick = () => {
         const j = +b.dataset.j, i = +b.dataset.f;
-        draft.items.push({ tipo: 'luna', ref: t.id, col: j, fila: i, auto: i === auto, desc: descLuna(t, i, j) + (reflejo && /ar|blue/i.test(t.cols[j]) ? ' · reflejo ' + reflejo : ''), cant: 1, precio: precioTarifa(t, i, j) });
+        draft.items.push({ tipo: 'luna', ref: t.id, col: j, fila: i, auto: i === auto, desc: descLuna(t, i, j) + extraLuna(t.cols[j]), cant: 1, precio: precioTarifa(t, i, j) });
         b.classList.add('on'); drawItems(); toast('Agregado: ' + t.cols[j] + ' · ' + money(precioTarifa(t, i, j))); // el panel queda abierto para agregar un extra (color)
       });
     };
@@ -1686,7 +1692,7 @@ routes['nueva-orden'] = {
         const t = it.tipo === 'luna' && it.auto && tarifa(it.ref); if (!t) return;
         const i = filaParaMedida(t, med), p = precioTarifa(t, i, it.col);
         if (i < 0 || i === it.fila || !p) return;
-        Object.assign(it, { fila: i, precio: p, desc: descLuna(t, i, it.col) + ((it.desc.match(/ · reflejo \w+$/) || [''])[0]) }); n++;
+        Object.assign(it, { fila: i, precio: p, desc: descLuna(t, i, it.col) + ((it.desc.match(/ · (reflejo|color) [^·]+$/) || [''])[0]) }); n++;
       });
       return n;
     };
@@ -3575,7 +3581,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.24.4';
+const APP_VERSION = '2026.09.24.5';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
