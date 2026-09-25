@@ -1601,12 +1601,15 @@ routes['nueva-orden'] = {
     };
     $$('#vsteps .stp').forEach(b => b.onclick = () => irPaso(+b.dataset.paso));
     const drawItems = () => {
-      $('#itbody').innerHTML = draft.items.length ? draft.items.map((it, i) => `<tr><td><input class="inp" data-i="${i}" data-k="desc" value="${esc(it.desc)}"></td>
+      $('#itbody').innerHTML = draft.items.length ? draft.items.map((it, i) => `<tr><td><input class="inp" data-i="${i}" data-k="desc" value="${esc(it.desc)}">${it.porLuna && num(it.cant) === 1 ? `<div class="lojo"><span class="small ${it.ojo ? 'muted' : 'strong'}" style="${it.ojo ? '' : 'color:var(--danger)'}">Una sola luna, ¿cuál?</span><div class="seg">${[['OD', 'Derecha (OD)'], ['OI', 'Izquierda (OI)']].map(([k, x]) => `<button type="button" data-ojo="${k}" data-i="${i}" class="${it.ojo === k ? 'on' : ''}">${x}</button>`).join('')}</div></div>` : ''}</td>
         <td><input class="inp c" data-i="${i}" data-k="cant" inputmode="numeric" value="${esc(it.cant)}"></td><td><input class="inp r num" data-i="${i}" data-k="precio" inputmode="decimal" value="${esc(it.precio)}" ${it.ref && !puede('descuentos') ? 'readonly title="El precio de la lista lo cambia el dueño o un socio"' : ''}></td>
         <td class="r num" id="st${i}">${money(num(it.cant) * num(it.precio))}</td><td><button type="button" class="btn ghost icon sm" data-del="${i}" aria-label="Quitar">${icon('x')}</button></td></tr>`).join('')
         : `<tr><td colspan="5" class="empty" style="padding:18px">Agrega una montura, lunas u otro producto.</td></tr>`;
       $$('#itbody [data-k]').forEach(inp => inp.oninput = () => { draft.items[inp.dataset.i][inp.dataset.k] = inp.value; if (inp.dataset.k === 'precio') draft.items[inp.dataset.i].auto = false; const it = draft.items[inp.dataset.i]; $('#st' + inp.dataset.i).textContent = money(num(it.cant) * num(it.precio)); calc(); });
       $$('#itbody [data-del]').forEach(b => b.onclick = () => { draft.items.splice(+b.dataset.del, 1); drawItems(); });
+      const ponOjo = (it, ojo) => { it.ojo = ojo; it.desc = it.desc.replace(/ · solo O[DI]$/, '') + (ojo ? ' · solo ' + ojo : ''); };
+      $$('#itbody [data-k="cant"]').forEach(inp => { const it = draft.items[inp.dataset.i]; if (it.porLuna) inp.onchange = () => { if (num(it.cant) !== 1) ponOjo(it, ''); drawItems(); }; });
+      $$('#itbody [data-ojo]').forEach(b => b.onclick = () => { ponOjo(draft.items[b.dataset.i], b.dataset.ojo); drawItems(); });
       calc();
     };
     const calc = () => {
@@ -1681,8 +1684,9 @@ routes['nueva-orden'] = {
       $$('#lff [data-r]').forEach(b => b.onclick = () => { colorFF = b.dataset.r; $$('#lff [data-r]').forEach(x => x.classList.toggle('on', x === b)); });
       $$('.lmat [data-j]').forEach(b => b.onclick = () => {
         const j = +b.dataset.j, i = +b.dataset.f;
-        draft.items.push({ tipo: 'luna', ref: t.id, col: j, fila: i, auto: i === auto, desc: descLuna(t, i, j) + extraLuna(t.cols[j]), cant: 1, precio: precioTarifa(t, i, j) });
-        b.classList.add('on'); drawItems(); toast('Agregado: ' + t.cols[j] + ' · ' + money(precioTarifa(t, i, j))); // el panel queda abierto para agregar un extra (color)
+        const suf = extraLuna(t.cols[j]);
+        draft.items.push({ tipo: 'luna', ref: t.id, col: j, fila: i, auto: i === auto, porLuna: true, suf, desc: descLuna(t, i, j) + suf, cant: 2, precio: round2(precioTarifa(t, i, j) / 2) });
+        b.classList.add('on'); drawItems(); toast('Agregado: ' + t.cols[j] + ' · 2 lunas · ' + money(precioTarifa(t, i, j))); // el panel queda abierto para agregar un extra (color)
       });
     };
     // Si cambia la medida, las lunas que se pusieron solas se vuelven a calcular.
@@ -1690,9 +1694,9 @@ routes['nueva-orden'] = {
       const med = medidaSel(); let n = 0;
       draft.items.forEach(it => {
         const t = it.tipo === 'luna' && it.auto && tarifa(it.ref); if (!t) return;
-        const i = filaParaMedida(t, med), p = precioTarifa(t, i, it.col);
+        const i = filaParaMedida(t, med), p = it.porLuna ? round2(precioTarifa(t, i, it.col) / 2) : precioTarifa(t, i, it.col);
         if (i < 0 || i === it.fila || !p) return;
-        Object.assign(it, { fila: i, precio: p, desc: descLuna(t, i, it.col) + ((it.desc.match(/ · (reflejo|color) [^·]+$/) || [''])[0]) }); n++;
+        Object.assign(it, { fila: i, precio: p, desc: descLuna(t, i, it.col) + (it.suf ?? ((it.desc.match(/ · (reflejo|color) [^·]+$/) || [''])[0])) + (it.ojo ? ' · solo ' + it.ojo : '') }); n++;
       });
       return n;
     };
@@ -1762,6 +1766,7 @@ routes['nueva-orden'] = {
       e.preventDefault();
       const f = readForm(e.target);
       if (!draft.pacienteId) { toast('Elige un paciente'); return; }
+      if (draft.items.some(i => i.porLuna && num(i.cant) === 1 && !i.ojo)) { irPaso(2); toast('Indica si la luna es derecha (OD) o izquierda (OI)'); return; }
       const items = draft.items.filter(i => i.desc && num(i.precio) >= 0 && num(i.cant) > 0).map(i => ({ ...i, cant: num(i.cant), precio: num(i.precio) }));
       if (!items.length) { toast('Agrega al menos un producto'); return; }
       const dir = esDirecta();
@@ -3581,7 +3586,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.24.5';
+const APP_VERSION = '2026.09.24.6';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
