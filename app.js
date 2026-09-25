@@ -333,12 +333,38 @@ const socioRol = s => !s ? 'vendedor' : s.id === dueno()?.id ? 'dueno' : s.rol =
 const miRol = () => socioRol(me());
 // Dueño y socios: autorizan los cambios delicados con su clave y se reparten la ganancia.
 const autorizantes = () => activos().filter(s => socioRol(s) !== 'vendedor');
-// Lo que NO puede hacer cada rol; todo lo demás sí.
-const PROHIBIDO = {
-  socio: ['ajustes'],
-  vendedor: ['ajustes', 'reportes', 'costos', 'descuentos', 'gastos', 'vales', 'cerrarCaja', 'otrosDias', 'ganancias', 'editarInventario', 'excel'],
+// Permisos que el dueño puede dar o quitar a cada persona. Lo que no está aquí lo hace todo el mundo
+// (pacientes, ventas, cobros, caja del día, agregar mercadería). Crear usuarios, la clave del dueño,
+// restaurar respaldo y empezar de cero son solo del dueño y no se pueden dar.
+const PERMISOS = [
+  ['Caja y dinero', [
+    ['descuentos', 'Dar descuentos y cambiar precios en la venta'],
+    ['gastos', 'Anotar y ver gastos'],
+    ['vales', 'Anotar vales de los socios'],
+    ['cerrarCaja', 'Cerrar la caja del día'],
+    ['otrosDias', 'Ver la caja de otros días'],
+    ['ganancias', 'Ver la ganancia y el reparto entre socios'],
+    ['excel', 'Descargar la caja para Excel'],
+    ['reportes', 'Ver reportes'],
+  ]],
+  ['Inventario y precios', [
+    ['costos', 'Ver lo que cuesta cada producto'],
+    ['editarInventario', 'Editar o borrar monturas y restar stock'],
+    ['precios', 'Cambiar precios de accesorios y lunas sin pedir la clave del dueño'],
+    ['anular', 'Anular ventas sin pedir la clave del dueño'],
+  ]],
+  ['Ajustes', [
+    ['ajustes', 'Entrar a Ajustes (datos de la óptica, boletas y siglas)'],
+  ]],
+];
+const PERMISO_KEYS = PERMISOS.flatMap(([, l]) => l.map(([k]) => k));
+// Lo que trae cada rol si el dueño no marcó los permisos uno por uno.
+const PERMISOS_ROL = {
+  socio: PERMISO_KEYS.filter(k => !['ajustes', 'precios', 'anular'].includes(k)),
+  vendedor: [],
 };
-const puede = accion => !(PROHIBIDO[miRol()] || []).includes(accion);
+const permisosDe = s => socioRol(s) === 'dueno' ? PERMISO_KEYS : Array.isArray(s?.permisos) ? s.permisos : PERMISOS_ROL[socioRol(s)];
+const puede = accion => !PERMISO_KEYS.includes(accion) || permisosDe(me()).includes(accion);
 const paciente = id => db.pacientes.find(p => p.id === id);
 const orden = id => db.ordenes.find(o => o.id === id);
 const medidasDe = pid => db.medidas.filter(m => m.pacienteId === pid).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.creado - a.creado);
@@ -1520,6 +1546,7 @@ routes['nueva-orden'] = {
           </div></div>
           <div class="card vstep" data-paso="2"><div class="card-h"><h3>Montura, lunas y accesorios</h3>${p ? `<span class="muted small">${esc(p.nombre)}</span>` : ''}</div><div class="card-b">
             <div class="fg"><div class="fld">Montura<div class="search" style="max-width:none">${icon('search')}<input id="mcode" placeholder="N° de varilla, marca o sigla…" autocomplete="off"><div class="sr" id="mres" hidden></div></div></div>
+            <div class="fld">Buscar luna<div class="search" style="max-width:none">${icon('search')}<input id="lq" placeholder="Ej. monofocal blue, inicial free AR, fotomatic…" autocomplete="off"><div class="sr" id="lres" hidden></div></div></div>
             <label class="f">Lunas<select class="inp" id="csel"><option value="">Elegir tipo de luna…</option>${gruposTarifa().map(([g, ts]) => `<optgroup label="${esc(g)}">${ts.map(t => `<option value="t:${t.id}">${esc(t.nombre)}</option>`).join('')}</optgroup>`).join('')}
               ${db.cristales.length ? `<optgroup label="Otros cristales (precio fijo)">${db.cristales.map(c => `<option value="c:${c.id}">${esc(c.nombre)} — ${money(c.precio)}</option>`).join('')}</optgroup>` : ''}</select>
               ${!db.tarifas.length && !db.cristales.length ? `<span class="hint">Aún no tienes precios de lunas. Créalos en <a class="lnk" href="#/inventario" id="irlunas">Inventario → Precios de lunas</a> o agrégalas con “Otro producto”.</span>` : ''}</label>
@@ -1608,7 +1635,7 @@ routes['nueva-orden'] = {
     });
     // Lunas: el rango (y el precio) sale de la medida elegida; se puede cambiar a mano.
     const medidaSel = () => db.medidas.find(m => m.id === draft.medidaId);
-    let tSel = null, fSel = null;
+    let tSel = null, fSel = null, reflejo = '', colBuscada = -1;
     const panel = () => {
       const box = $('#lpanel'), t = tSel;
       if (!t) { box.innerHTML = ''; return; }
@@ -1621,9 +1648,10 @@ routes['nueva-orden'] = {
       // Tabla completa: rangos en filas y tratamientos (UV, AR, Blue…) en columnas; se toca el precio para agregarlo.
       const tabla = `<div class="tbl-wrap lmat-w"><table class="lmat"><thead><tr><th>Rango</th>${t.cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>
         ${t.filas.map((f, i) => `<tr class="${i === auto ? 'auto' : ''} ${i === fila ? 'sel' : ''}"><td class="lr"><b>${esc(f.rango)}</b>${i === auto ? ' <span class="chip entr">Su medida</span>' : ''}${conRango(f) ? `<div class="muted small">esf ±${n2r(f.esf)} · cil −${n2r(f.cil)}</div>` : ''}</td>
-          ${t.cols.map((_, j) => { const pr = precioTarifa(t, i, j); return pr ? `<td><button type="button" data-f="${i}" data-j="${j}"><small>${esc(t.cols[j])}</small>${money(pr)}</button></td>` : '<td class="nop"><span class="muted">—</span></td>'; }).join('')}</tr>`).join('')}</tbody></table></div>`;
+          ${t.cols.map((_, j) => { const pr = precioTarifa(t, i, j); return pr ? `<td><button type="button" data-f="${i}" data-j="${j}" class="${j === colBuscada ? 'hl' : ''}"><small>${esc(t.cols[j])}</small>${money(pr)}</button></td>` : '<td class="nop"><span class="muted">—</span></td>'; }).join('')}</tr>`).join('')}</tbody></table></div>`;
       box.innerHTML = `<div class="lpanel"><b>${esc(t.nombre)}</b>
         <div class="small muted">${aviso}</div>
+        <div class="lrefl"><span class="small strong">Reflejo del AR:</span><div class="seg" id="lrefl">${[['', 'Sin especificar'], ['azul', 'Azul'], ['verde', 'Verde']].map(([k, x]) => `<button type="button" data-r="${k}" class="${reflejo === k ? 'on' : ''}">${x}</button>`).join('')}</div></div>
         ${tabla}
         ${extrasLuna().length ? `<div class="fld">Extras<div class="pick" id="lext">${extrasLuna().map(p => `<button type="button" data-p="${p.id}">${icon('plus')} ${esc(p.nombre)} <small>${money(p.precio)}</small></button>`).join('')}</div></div>
         <div class="lcolor" id="lcolor" hidden><div class="seg" id="lctipo"><button type="button" data-t="completo" class="on">Completo</button><button type="button" data-t="degradado">Degradado</button></div>
@@ -1644,9 +1672,10 @@ routes['nueva-orden'] = {
         draft.items.push({ tipo: 'producto', ref: colorP.id, desc, cant: 1, precio: colorP.precio }); drawItems();
         $('#lcolor').hidden = true; toast('Color agregado: ' + desc);
       });
+      $$('#lrefl [data-r]').forEach(b => b.onclick = () => { reflejo = b.dataset.r; $$('#lrefl [data-r]').forEach(x => x.classList.toggle('on', x === b)); });
       $$('.lmat [data-j]').forEach(b => b.onclick = () => {
         const j = +b.dataset.j, i = +b.dataset.f;
-        draft.items.push({ tipo: 'luna', ref: t.id, col: j, fila: i, auto: i === auto, desc: descLuna(t, i, j), cant: 1, precio: precioTarifa(t, i, j) });
+        draft.items.push({ tipo: 'luna', ref: t.id, col: j, fila: i, auto: i === auto, desc: descLuna(t, i, j) + (reflejo && /ar|blue/i.test(t.cols[j]) ? ' · reflejo ' + reflejo : ''), cant: 1, precio: precioTarifa(t, i, j) });
         b.classList.add('on'); drawItems(); toast('Agregado: ' + t.cols[j] + ' · ' + money(precioTarifa(t, i, j))); // el panel queda abierto para agregar un extra (color)
       });
     };
@@ -1657,19 +1686,43 @@ routes['nueva-orden'] = {
         const t = it.tipo === 'luna' && it.auto && tarifa(it.ref); if (!t) return;
         const i = filaParaMedida(t, med), p = precioTarifa(t, i, it.col);
         if (i < 0 || i === it.fila || !p) return;
-        Object.assign(it, { fila: i, precio: p, desc: descLuna(t, i, it.col) }); n++;
+        Object.assign(it, { fila: i, precio: p, desc: descLuna(t, i, it.col) + ((it.desc.match(/ · reflejo \w+$/) || [''])[0]) }); n++;
       });
       return n;
     };
     $('#irlunas') && ($('#irlunas').onclick = () => { invTab = 'cristales'; });
     $('#csel').onchange = () => {
       const [k, id] = $('#csel').value.split(':');
-      if (k === 't') { tSel = tarifa(id); fSel = null; panel(); return; }
+      if (k === 't') { tSel = tarifa(id); fSel = null; colBuscada = -1; panel(); return; }
       tSel = null; panel();
       const c = k === 'c' && db.cristales.find(x => x.id === id); if (!c) return;
       draft.items.push({ tipo: 'cristal', ref: c.id, desc: 'Cristales ' + c.nombre, cant: 1, precio: c.precio });
       $('#csel').value = ''; drawItems();
     };
+    // Buscar luna escribiendo: "monofocal blue", "inicial free ar"… Muestra lista + tratamiento y abre sus precios.
+    const lq = $('#lq'), lres = $('#lres');
+    const pintarLunas = () => {
+      const toks = sinTilde(lq.value.trim()).split(/\s+/).filter(Boolean);
+      if (!toks.length) { lres.hidden = true; return; }
+      const med = medidaSel(), hits = [];
+      db.tarifas.forEach(t => t.cols.forEach((c, j) => {
+        const txt = sinTilde(`${t.grupo} ${t.nombre} ${c}`);
+        if (!toks.every(k => txt.includes(k))) return;
+        const auto = filaParaMedida(t, med), precios = t.filas.map((_, i) => precioTarifa(t, i, j)).filter(Boolean);
+        if (precios.length) hits.push({ t, j, auto, precio: auto >= 0 ? precioTarifa(t, auto, j) : Math.min(...precios) });
+      }));
+      lres.innerHTML = hits.slice(0, 30).map((h, k) => `<a href="#" data-k="${k}"><span class="grow"><b>${esc(h.t.nombre)}</b> · ${esc(h.t.cols[h.j])}<br><span class="muted small">${esc(h.t.grupo)}${h.auto >= 0 ? ' · rango ' + esc(h.t.filas[h.auto].rango) + ' (su medida)' : ''}</span></span><b class="num">${h.auto >= 0 ? '' : 'desde '}${money(h.precio)}</b></a>`).join('') || `<div class="empty small">No hay lunas con “${esc(lq.value.trim())}”</div>`;
+      lres.hidden = false;
+      $$('[data-k]', lres).forEach(a => a.onmousedown = e => {
+        e.preventDefault(); const h = hits[+a.dataset.k];
+        lq.value = ''; lres.hidden = true;
+        $('#csel').value = 't:' + h.t.id; tSel = h.t; fSel = null; colBuscada = h.j; panel();
+        setTimeout(() => ($('.lmat .hl') || $('#lpanel'))?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+      });
+    };
+    lq.oninput = pintarLunas; lq.onfocus = pintarLunas;
+    lq.onblur = () => setTimeout(() => { lres.hidden = true; }, 200);
+    lq.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); $('[data-k="0"]', lres)?.dispatchEvent(new MouseEvent('mousedown')); } };
     const agregarProducto = p => {
       if (!p) return;
       if (conStock(p) && num(p.stock) <= 0) toast(`Atención: ${p.nombre} figura sin stock`);
@@ -1785,7 +1838,7 @@ routes.orden = {
       moverStock(o.items, +1);
       db.anuladas.unshift({ ...o, pacienteNombre: p ? p.nombre : '', total: totalOrden(o), pagos: pagosDe(o.id), anuladaTs: Date.now(), anuladaPor: user });
       db.pagos = db.pagos.filter(x => x.ordenId !== o.id); db.ordenes = db.ordenes.filter(x => x !== o); save(); toast('Orden anulada'); go('#/ordenes');
-    });
+    }, 'anular');
     $('#ocp').onclick = () => { const cp = comprobanteDe(o.id); cp ? comprobanteView(cp) : emitirForm(o); };
     $('#owa') && ($('#owa').onclick = () => { if (o.estado === 'listo') { o.avisado = hoy(); save(); } });
   },
@@ -2275,12 +2328,12 @@ routes.caja = {
           return `<tr class="link" data-h="#/orden/${o.id}"><td class="ordnum">${pad(o.numero)}</td><td><b>${esc(paciente(o.pacienteId)?.nombre)}</b>${pg.tipo === 'saldo' ? '<div class="muted small">Pago de saldo</div>' : ''}</td><td class="hide-sm small muted">${esc(o.items.map(i => i.desc).join(' · ')).slice(0, 70)}</td>
           <td class="r num">${money(totalOrden(o))}</td><td class="r num strong">${money(pg.monto)}</td><td class="r num" style="${totalOrden(o) - pagadoHasta > 0.009 ? 'color:var(--danger)' : ''}">${money(Math.max(0, totalOrden(o) - pagadoHasta))}</td><td><span class="tag">${esc(pg.metodo)}</span></td></tr>`; }).join('')}</tbody>
         <tfoot><tr><td colspan="4" class="r hide-sm-no">Total cobrado</td><td class="r num">${money(c.ingresos)}</td><td colspan="2"></td></tr></tfoot></table>` : `<div class="empty">No hay cobros este día.</div>`}</div></div></div>
-      ${puede('ganancias') ? `<div class="grid g2 mt">
-        <div class="card"><div class="card-h"><h3>Gastos</h3><button class="btn sm" id="addg">${icon('plus')} Gasto</button></div><div class="card-b">
+      ${puede('gastos') || puede('vales') ? `<div class="grid ${puede('gastos') && puede('vales') ? 'g2' : ''} mt">
+        ${!puede('gastos') ? '' : `<div class="card"><div class="card-h"><h3>Gastos</h3><button class="btn sm" id="addg">${icon('plus')} Gasto</button></div><div class="card-b">
           ${c.gastos.length ? `<table><tbody>${c.gastos.map(g => `<tr><td><b>${esc(g.concepto)}</b><div class="muted small">${esc(g.metodo || 'Efectivo')} · ${esc(socioName(g.por))}</div></td><td class="r num">${money(g.monto)}</td><td style="width:40px"><button class="btn ghost icon sm" data-gdel="${g.id}" title="Eliminar">${icon('trash')}</button></td></tr>`).join('')}</tbody>
-          <tfoot><tr><td>Total gastos</td><td class="r num">${money(c.tGastos)}</td><td></td></tr></tfoot></table>` : `<div class="empty" style="padding:14px">Sin gastos.</div>`}</div></div>
-        <div class="card"><div class="card-h"><h3>Vales de los socios</h3><button class="btn sm" id="addv">${icon('plus')} Vale</button></div><div class="card-b">
-          ${c.vales.length ? `<table><tbody>${c.vales.map(v => `<tr><td><b>${esc(socioName(v.socioId))}</b><div class="muted small">${esc(v.concepto || 'Vale')}</div></td><td class="r num">${money(v.monto)}</td><td style="width:40px"><button class="btn ghost icon sm" data-vdel="${v.id}" title="Eliminar">${icon('trash')}</button></td></tr>`).join('')}</tbody></table>` : `<div class="empty" style="padding:14px">Sin vales.</div>`}</div></div>
+          <tfoot><tr><td>Total gastos</td><td class="r num">${money(c.tGastos)}</td><td></td></tr></tfoot></table>` : `<div class="empty" style="padding:14px">Sin gastos.</div>`}</div></div>`}
+        ${!puede('vales') ? '' : `<div class="card"><div class="card-h"><h3>Vales de los socios</h3><button class="btn sm" id="addv">${icon('plus')} Vale</button></div><div class="card-b">
+          ${c.vales.length ? `<table><tbody>${c.vales.map(v => `<tr><td><b>${esc(socioName(v.socioId))}</b><div class="muted small">${esc(v.concepto || 'Vale')}</div></td><td class="r num">${money(v.monto)}</td><td style="width:40px"><button class="btn ghost icon sm" data-vdel="${v.id}" title="Eliminar">${icon('trash')}</button></td></tr>`).join('')}</tbody></table>` : `<div class="empty" style="padding:14px">Sin vales.</div>`}</div></div>`}
       </div>` : ''}
       <div class="grid ${puede('ganancias') ? 'g2' : ''} mt">
         <div class="card"><div class="card-h"><h3>Cuadre por método</h3></div><div class="card-b tbl-wrap"><table><thead><tr><th>Método</th><th class="r">Entró</th><th class="r">Salió</th><th class="r">Queda</th></tr></thead><tbody>
@@ -2404,9 +2457,9 @@ function buscadorMonturas(inp, res, onPick) {
   let lista = [];
   const pick = m => { inp.value = ''; res.hidden = true; lista = []; onPick(m); };
   inp.oninput = () => {
-    const q = inp.value.trim(); if (!q) { res.hidden = true; lista = []; return; }
-    lista = buscarMonturas(q).slice(0, 12);
-    res.innerHTML = lista.map(m => `<a href="#" data-m="${m.id}">${filaMontura(m)}</a>`).join('') || `<div class="empty small">No hay monturas con “${esc(q)}”</div>`;
+    const q = inp.value.trim();
+    lista = q ? buscarMonturas(q).slice(0, 12) : db.monturas.filter(m => num(m.stock) > 0).sort((a, b) => b.codigo.localeCompare(a.codigo, 'es', { numeric: true })).slice(0, 40);
+    res.innerHTML = (q ? '' : `<div class="grp">Escribe varilla, marca, sigla o código · últimas monturas</div>`) + (lista.map(m => `<a href="#" data-m="${m.id}">${filaMontura(m)}</a>`).join('') || `<div class="empty small">${q ? `No hay monturas con “${esc(q)}”` : 'Todavía no hay monturas con stock.'}</div>`);
     res.hidden = false;
     $$('[data-m]', res).forEach(a => a.onclick = e => { e.preventDefault(); pick(db.monturas.find(x => x.id === a.dataset.m)); });
   };
@@ -2414,7 +2467,7 @@ function buscadorMonturas(inp, res, onPick) {
     if (e.key === 'Enter') { e.preventDefault(); if (lista[0]) pick(lista[0]); }
     if (e.key === 'Escape') res.hidden = true;
   };
-  if (!res.classList.contains('static')) inp.onblur = () => setTimeout(() => { res.hidden = true; }, 200);
+  if (!res.classList.contains('static')) { inp.onfocus = inp.oninput; inp.onblur = () => setTimeout(() => { res.hidden = true; }, 200); }
 }
 
 // ---------- Lista de precios de lunas ----------
@@ -2606,10 +2659,10 @@ function productoForm(p) {
         ev.preventDefault();
         const f = readForm(ev.target); f.precio = num(f.precio); f.costo = f.costo === '' ? '' : num(f.costo); f.stock = f.stock === '' ? '' : num(f.stock);
         const doit = () => { if (p) Object.assign(p, f); else db.productos.push({ id: uid(), ...f }); save(); closeModal(); toast('Producto guardado'); render(); };
-        !p ? pideDueno(`Agregar "${f.nombre}" a ${money(f.precio)}`, doit)
-          : num(p.precio) !== f.precio || num(p.costo) !== num(f.costo) ? pideDueno(`Cambiar precio o costo de "${p.nombre}"`, doit) : doit();
+        !p ? pideDueno(`Agregar "${f.nombre}" a ${money(f.precio)}`, doit, 'precios')
+          : num(p.precio) !== f.precio || num(p.costo) !== num(f.costo) ? pideDueno(`Cambiar precio o costo de "${p.nombre}"`, doit, 'precios') : doit();
       };
-      $('#pdel', bg) && ($('#pdel', bg).onclick = () => pideDueno(`Eliminar "${p.nombre}"`, () => { db.productos = db.productos.filter(x => x !== p); save(); render(); }));
+      $('#pdel', bg) && ($('#pdel', bg).onclick = () => pideDueno(`Eliminar "${p.nombre}"`, () => { db.productos = db.productos.filter(x => x !== p); save(); render(); }, 'precios'));
     },
   });
 }
@@ -2619,8 +2672,10 @@ function productoForm(p) {
 let ajustesAbierto = false;
 const dueno = () => socio(db.config.duenoId) || db.config.socios.find(s => /jorge/i.test(s.nombre)) || db.config.socios[0];
 const soyDueno = () => dueno()?.id === user;
-function pideDueno(motivo, cb) {
+function pideDueno(motivo, cb, permiso) {
   const d = dueno();
+  // Si el dueño le dio este permiso a la persona, no necesita su clave (queda anotado igual).
+  if (permiso && !soyDueno() && puede(permiso)) { confirmBox('¿' + esc(motivo) + '?', () => { addLog(motivo); save(); cb(); }, 'Continuar'); return; }
   if (!db.config.claveDueno && soyDueno()) { crearClaveDueno(cb); return; }
   const sinClave = !db.config.claveDueno; // todavía no la creó: solo se le puede pedir aprobación
   modal({
@@ -2990,7 +3045,7 @@ routes.inventario = {
           ${l.map(c => `<tr class="link" data-id="${c.id}"><td><b>${esc(c.nombre)}</b></td><td class="hide-sm">${esc(c.tipo || '—')}</td><td class="r num">${money(c.precio)}</td></tr>`).join('')}</tbody></table></div>` : `<p class="muted small">No hay cristales de precio fijo.</p>`}
           <button class="btn sm mt-s" id="newc">${icon('plus')} Cristal de precio fijo</button></div>`;
         if (puede('editarInventario')) $$('#ilist [data-id]').forEach(r => r.onclick = () => cristalForm(db.cristales.find(x => x.id === r.dataset.id)));
-        $$('#ilist [data-edt]').forEach(b => b.onclick = () => { const t = tarifa(b.dataset.edt); pideDueno(`Editar lista de precios "${t.nombre}"`, () => tarifaForm(t)); });
+        $$('#ilist [data-edt]').forEach(b => b.onclick = () => { const t = tarifa(b.dataset.edt); pideDueno(`Editar lista de precios "${t.nombre}"`, () => tarifaForm(t), 'precios'); });
         $('#newc').hidden = !puede('editarInventario'); $('#newc').onclick = () => cristalForm();
       }
     };
@@ -2998,7 +3053,7 @@ routes.inventario = {
     $$('#ivista button').forEach(b => b.onclick = () => { invVista = b.dataset.v; try { localStorage.setItem('terra-inv-vista', invVista); } catch (e) { } render(); });
     $$('#ifil [data-f]').forEach(b => b.onclick = () => { invFiltro = b.dataset.f; $$('#ifil [data-f]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
     $('#if').oninput = draw; draw();
-    $('#newi').onclick = () => invTab === 'monturas' ? monturaForm() : invTab === 'productos' ? productoForm() : pideDueno('Crear una lista de precios de lunas', () => tarifaForm());
+    $('#newi').onclick = () => invTab === 'monturas' ? monturaForm() : invTab === 'productos' ? productoForm() : pideDueno('Crear una lista de precios de lunas', () => tarifaForm(), 'precios');
     $('#ingreso') && ($('#ingreso').onclick = () => ingresoForm());
     $('#invpdf').onclick = async () => {
       try { await saveFile(`Inventario ${hoy()}.pdf`, await inventarioPDF()); } catch (err) { toast('No se pudo generar el PDF: ' + err.message); }
@@ -3168,10 +3223,10 @@ function cristalForm(c) {
       $('#cf2', bg).onsubmit = ev => {
         ev.preventDefault(); const f = readForm(ev.target); f.precio = num(f.precio);
         const doit = () => { if (c) Object.assign(c, f); else db.cristales.push({ id: uid(), ...f }); save(); closeModal(); toast('Guardado'); render(); };
-        !c ? pideDueno(`Agregar cristal "${f.nombre}" a ${money(f.precio)}`, doit)
-          : num(c.precio) !== f.precio ? pideDueno(`Cambiar precio de "${c.nombre}": ${money(c.precio)} → ${money(f.precio)}`, doit) : doit();
+        !c ? pideDueno(`Agregar cristal "${f.nombre}" a ${money(f.precio)}`, doit, 'precios')
+          : num(c.precio) !== f.precio ? pideDueno(`Cambiar precio de "${c.nombre}": ${money(c.precio)} → ${money(f.precio)}`, doit, 'precios') : doit();
       };
-      $('#cdel', bg) && ($('#cdel', bg).onclick = () => pideDueno(`Eliminar cristal "${c.nombre}"`, () => { db.cristales = db.cristales.filter(x => x !== c); save(); render(); }));
+      $('#cdel', bg) && ($('#cdel', bg).onclick = () => pideDueno(`Eliminar cristal "${c.nombre}"`, () => { db.cristales = db.cristales.filter(x => x !== c); save(); render(); }, 'precios'));
     },
   });
 }
@@ -3219,14 +3274,14 @@ routes.recordatorios = {
 routes.ajustes = {
   html() {
     const c = db.config, F = c.fact, d = dueno();
-    if (!ajustesAbierto) return `<div class="page-head"><div><h1>Ajustes</h1><p>Protegido con la clave del dueño.</p></div></div>
+    if (soyDueno() && !ajustesAbierto) return `<div class="page-head"><div><h1>Ajustes</h1><p>Protegido con la clave del dueño.</p></div></div>
       <div class="card" style="max-width:460px"><div class="card-b">
         <div class="lock-note">${icon('lock')}<div>Ajustes, las claves y el respaldo solo los maneja <b>${esc(d.nombre)}</b>.</div></div>
         ${c.claveDueno ? `<form id="ajf" class="form"><label class="f">Clave de dueño<input class="inp pin" id="ajpin" type="password" inputmode="numeric" autocomplete="off" maxlength="8" required></label><div class="err" id="ajerr"></div>
           <button class="btn primary">${icon('unlock')} Abrir Ajustes</button></form>`
         : soyDueno() ? `<p class="muted small" style="margin-top:0">Todavía no tienes clave de dueño. Créala ahora: con ella se abre Ajustes y se cambia la lista de precios.</p><button class="btn primary" id="ajcrear">${icon('lock')} Crear mi clave de dueño</button>`
           : `<p class="muted small" style="margin:0">${esc(d.nombre)} tiene que entrar con su usuario y crear su clave de dueño.</p>`}</div></div>`;
-    return `<div class="page-head"><div><h1>Ajustes</h1><p>Datos de la óptica, personas y respaldo.</p></div><div class="actions"><button class="btn" id="ajlock">${icon('lock')} Cerrar Ajustes</button></div></div>
+    return `<div class="page-head"><div><h1>Ajustes</h1><p>Datos de la óptica, personas y respaldo.</p></div>${soyDueno() ? `<div class="actions"><button class="btn" id="ajlock">${icon('lock')} Cerrar Ajustes</button></div>` : ''}</div>
       <div class="grid g2">
         <div class="card"><div class="card-h"><h3>Datos de la óptica</h3></div><div class="card-b"><form id="cfg" class="form">
           <label class="f">Nombre<input class="inp" name="nombre" value="${esc(c.nombre)}" required></label>
@@ -3270,25 +3325,27 @@ routes.ajustes = {
           ${ABREV_GRUPOS.map(([g, t]) => `<div class="fld">${t}<div class="abl" data-g="${g}">${abrev()[g].map(([n, a]) => filaAbrev(n, a)).join('')}</div><div><button type="button" class="btn sm ghost" data-addab="${g}">${icon('plus')} Agregar</button></div></div>`).join('')}
           <p class="hint" style="margin:0">Si cambias una sigla, se actualiza en todas las monturas. Si cambias un nombre, las monturas que ya tenían el nombre anterior lo conservan.</p>
           <div class="actions"><button class="btn primary">Guardar siglas</button><button type="button" class="btn ghost" id="abreset">Volver a las siglas iniciales</button></div></form></div></div>
-        <div class="card"><div class="card-h"><div><h3>Personas y permisos</h3><div class="sub">Cada una entra con su propio usuario y contraseña.</div></div><button class="btn sm primary" id="padd">${icon('plus')} Agregar</button></div><div class="card-b">
-          ${activos().map(s => { const u = socioRol(s) === 'dueno' ? sesion.perfil?.usuario || s.usuario || sesion.usuario?.email : s.usuario; return `<div class="row between" style="padding:10px 0;border-bottom:1px solid var(--line-2)"><div class="row"><span class="avatar">${initials(s.nombre)}</span><div><b>${esc(s.nombre)}</b><div class="muted small">${ROLES[socioRol(s)]}${socioRol(s) === 'vendedor' ? '' : ` · ${s.pct}% de la ganancia`} · ${u ? 'usuario ' + esc(u) : '<span style="color:var(--danger)">sin usuario</span>'}</div></div></div><button class="btn sm" data-per="${s.id}">${u ? 'Editar' : 'Crear usuario'}</button></div>`; }).join('')}
-          <p class="hint"><b>Dueño:</b> todo. <b>Socio:</b> todo menos Ajustes (personas, datos de la óptica, lista de precios y respaldos). <b>Vendedor:</b> pacientes, ventas, cobros, caja del día y agregar mercadería; no ve costos, ganancias ni reportes, y no da descuentos.</p></div></div>
+        ${!soyDueno() ? '' : `<div class="card"><div class="card-h"><div><h3>Personas y permisos</h3><div class="sub">Cada una entra con su propio usuario y contraseña.</div></div><button class="btn sm primary" id="padd">${icon('plus')} Agregar</button></div><div class="card-b">
+          ${activos().map(s => { const u = socioRol(s) === 'dueno' ? sesion.perfil?.usuario || s.usuario || sesion.usuario?.email : s.usuario; return `<div class="row between" style="padding:10px 0;border-bottom:1px solid var(--line-2)"><div class="row"><span class="avatar">${initials(s.nombre)}</span><div><b>${esc(s.nombre)}</b><div class="muted small">${ROLES[socioRol(s)]}${socioRol(s) === 'vendedor' ? '' : ` · ${s.pct}% de la ganancia`} · ${resumenPermisos(s)} · ${u ? 'usuario ' + esc(u) : '<span style="color:var(--danger)">sin usuario</span>'}</div></div></div><button class="btn sm" data-per="${s.id}">${u ? 'Editar' : 'Crear usuario'}</button></div>`; }).join('')}
+          <p class="hint">Todos pueden atender pacientes, vender, cobrar, ver la caja del día y agregar mercadería. Lo demás lo decides tú con el botón Editar de cada persona. Crear usuarios, tu clave de dueño y los respaldos son solo tuyos.</p></div></div>
         <div class="card"><div class="card-h"><h3>Clave del dueño</h3></div><div class="card-b">
           <p class="muted small" style="margin-top:0">Es de <b>${esc(d.nombre)}</b>. Abre Ajustes y permite cambiar la lista de precios de lunas. Solo se cambia sabiendo la clave actual.</p>
           <button class="btn" id="cdcambiar">${icon('lock')} Cambiar clave de dueño</button></div></div>
+`}
         <div class="card"><div class="card-h"><h3>Cuenta TerraÓptica</h3></div><div class="card-b">
           <div class="cash-sum"><div class="line"><span>Tu usuario</span><b>${esc(sesion.perfil?.usuario || sesion.usuario?.email || '')}</b></div>
           <div class="line"><span>Plan</span><b>${esc(avisoPlan().corto)}</b></div></div>
           <p class="muted small">Con tu usuario y tu contraseña entras a la óptica desde cualquier celular, tablet o computadora. Si la olvidas, en la pantalla de entrada toca "Olvidé mi clave".</p>
           <div class="actions"><a class="btn" href="${waSoporte('Hola, tengo una consulta sobre TerraÓptica (' + (c.nombre || '') + ').')}" target="_blank" rel="noopener">${icon('wa')} Escribir a soporte</a>
           <button class="btn" id="csalir3">${icon('logout')} Cerrar sesión en este equipo</button></div></div></div>
-        <div class="card"><div class="card-h"><h3>Respaldo de datos</h3></div><div class="card-b">
+        ${!soyDueno() ? '' : `<div class="card"><div class="card-h"><h3>Respaldo de datos</h3></div><div class="card-b">
           <p class="muted small" style="margin-top:0">Tus datos se guardan en la nube de TerraÓptica y quedan copiados en cada equipo. Igual puedes descargar una copia cuando quieras.</p>
           <div class="actions"><button class="btn primary" id="exp">${icon('down')} Descargar respaldo</button><label class="btn">${icon('up')} Restaurar respaldo<input type="file" id="imp" accept=".json,.txt,application/json,text/plain" hidden></label></div>
           ${c.ultimoRespaldo ? `<p class="hint">Último respaldo: ${new Date(c.ultimoRespaldo).toLocaleString('es-PE')}</p>` : ''}
           <div style="border-top:1px solid var(--line-2);margin-top:16px;padding-top:14px"><b class="small">¿Terminaste de probar?</b><p class="muted small" style="margin:4px 0 10px">Borra los datos de ejemplo y empieza con tus pacientes reales. Pide la clave de ambos socios.</p>
           <button class="btn danger" id="reset">${icon('trash')} Empezar de cero</button></div></div></div>
-        ${hayDatosCelular() ? `<div class="card"><div class="card-h"><h3>Datos de Glooptic en este celular</h3></div><div class="card-b">
+`}
+        ${soyDueno() && hayDatosCelular() ? `<div class="card"><div class="card-h"><h3>Datos de Glooptic en este celular</h3></div><div class="card-b">
           <p class="muted small" style="margin-top:0">Este celular todavía guarda los datos del sistema anterior. ${(e => e && e.como === 'si' ? `Ya se subieron a la nube el ${new Date(e.ts).toLocaleString('es-PE', { dateStyle: 'medium', timeStyle: 'short' })}.` : 'Todavía no se subieron a la nube.')(estadoSubida(sesion.optica.id))} Puedes revisar si falta algo: solo se suma lo que no está.</p>
           <div class="actions"><button class="btn" id="subcel">${icon('up')} Revisar y subir</button></div></div></div>` : ''}
         <div class="card"><div class="card-h"><h3>Cambios autorizados</h3><span class="sub">Últimos 20</span></div><div class="card-b" style="padding-top:8px">
@@ -3300,7 +3357,7 @@ routes.ajustes = {
       </div>`;
   },
   bind() {
-    if (!ajustesAbierto) {
+    if (soyDueno() && !ajustesAbierto) {
       $('#ajcrear') && ($('#ajcrear').onclick = () => crearClaveDueno(() => { ajustesAbierto = true; render(); }));
       $('#ajf') && ($('#ajf').onsubmit = e => {
         e.preventDefault();
@@ -3309,11 +3366,11 @@ routes.ajustes = {
       });
       return;
     }
-    $('#ajlock').onclick = () => { ajustesAbierto = false; render(); };
-    $('#cdcambiar').onclick = () => crearClaveDueno(null, true);
+    $('#ajlock') && ($('#ajlock').onclick = () => { ajustesAbierto = false; render(); });
+    $('#cdcambiar') && ($('#cdcambiar').onclick = () => crearClaveDueno(null, true));
     $('#cfg').onsubmit = e => { e.preventDefault(); const f = readForm(e.target); Object.assign(db.config, f, { recordatorioMeses: num(f.recordatorioMeses) || 12 }); save(); toast('Datos guardados'); render(); };
     $$('[data-per]').forEach(b => b.onclick = () => personaForm(socio(b.dataset.per)));
-    $('#padd').onclick = () => personaForm();
+    $('#padd') && ($('#padd').onclick = () => personaForm());
     $('#factf').onsubmit = e => {
       e.preventDefault();
       const f = readForm(e.target), F = fact();
@@ -3348,37 +3405,51 @@ routes.ajustes = {
         igvPct: F.ruc && F.igv ? num(F.igvPct) : 0, pagado: pagadoOrden(o), saldo: Math.max(0, saldoOrden(o)), metodos: [...new Set(pagosDe(o.id).map(x => x.metodo))], medidaId: o.medidaId, entrega: o.entrega, por: user, estado: 'prueba' };
       try { saveFile(`Prueba ${TIPOS_CP[c.tipo]}.pdf`, await comprobantePDF(c)); } catch (err) { toast('No se pudo generar el PDF: ' + err.message); }
     };
-    $('#exp').onclick = descargarRespaldo;
+    $('#exp') && ($('#exp').onclick = descargarRespaldo);
     $('#subcel') && ($('#subcel').onclick = () => ofrecerSubida(true));
     $('#csalir3').onclick = salirDeCuenta;
-    $('#reset').onclick = () => dual('Borrar pacientes, órdenes, caja e inventario (se conservan los socios, los datos de la óptica y las listas de precios)', () => {
+    $('#reset') && ($('#reset').onclick = () => dual('Borrar pacientes, órdenes, caja e inventario (se conservan los socios, los datos de la óptica y las listas de precios)', () => {
       const cfg = { ...db.config, nextOrden: 1, nextMontura: 1, fact: { ...db.config.fact, numB: 1, numF: 1 } }, tar = db.tarifas, prod = db.productos; db = blank(); db.config = cfg; db.tarifas = tar; db.productos = prod; permitirBorrado = true; save(); toast('Listo: el sistema quedó en blanco'); go('#/inicio');
-    });
-    $('#imp').onchange = e => {
+    }));
+    $('#imp') && ($('#imp').onchange = e => {
       const file = e.target.files[0]; if (!file) return;
       file.text().then(t => {
         let data; try { data = JSON.parse(t); if (!data.config || !data.pacientes) throw 0; } catch (err) { toast('El archivo no es un respaldo válido'); return; }
         dual(`Restaurar respaldo (${data.pacientes.length} pacientes, ${data.ordenes.length} órdenes). Se reemplazan los datos actuales.`, () => { db = normDb(Object.assign(blank(), data)); permitirBorrado = true; save(); toast('Respaldo restaurado'); render(); });
       });
-    };
+    });
   },
 };
 const filaAbrev = (n, a) => `<div class="abr"><input class="inp sm" data-n value="${esc(n)}" placeholder="Nombre" aria-label="Nombre"><input class="inp sm up" data-a value="${esc(a)}" placeholder="Sigla" maxlength="5" aria-label="Sigla"><button type="button" class="btn ghost icon sm" data-delab aria-label="Quitar">${icon('x')}</button></div>`;
+// Casillas de permisos del formulario de una persona.
+function permisosHTML(s) {
+  const tiene = permisosDe(s || { rol: 'vendedor' });
+  return `<div class="fld">Qué puede hacer
+    <div class="row" style="gap:6px;flex-wrap:wrap"><span class="muted small">Rápido:</span><button type="button" class="btn sm" data-preset="todo">Igual que yo</button><button type="button" class="btn sm" data-preset="socio">Como socio</button><button type="button" class="btn sm" data-preset="vendedor">Solo atender</button></div>
+    <div class="perms">${PERMISOS.map(([g, l]) => `<div class="perm-g"><b class="small">${g}</b>${l.map(([k, t]) => `<label class="perm"><input type="checkbox" data-perm="${k}" ${tiene.includes(k) ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div>`).join('')}</div>
+    <div class="hint">Siempre puede atender pacientes, vender, cobrar, ver la caja del día y agregar mercadería. Crear usuarios, cambiar tu clave de dueño, restaurar respaldos y empezar de cero son solo tuyos.</div></div>`;
+}
+function resumenPermisos(s) {
+  if (socioRol(s) === 'dueno') return 'todo';
+  const n = permisosDe(s).length;
+  return n === PERMISO_KEYS.length ? 'igual que el dueño' : n ? `${n} de ${PERMISO_KEYS.length} permisos` : 'solo atender';
+}
 // Agregar o editar una persona, con su usuario y contraseña. Solo el dueño entra aquí (Ajustes).
 // El porcentaje de ganancia que no tienen los socios queda para el dueño.
 function personaForm(s) {
   const esD = s && s.id === dueno().id;
-  let rol = s ? socioRol(s) : 'vendedor', cambiarClave = false;
+  let rol = s ? socioRol(s) : 'vendedor', cambiarClave = false, tocados = !!(s && Array.isArray(s.permisos));
   const conUsuario = !!(s && s.usuario);
   modal({
     title: s ? 'Editar ' + esc(s.nombre) : 'Agregar persona',
     body: `<form id="pf2" class="form" autocomplete="off"><label class="f">Nombre<input class="inp" name="nombre" value="${esc(s?.nombre || '')}" required maxlength="40"></label>
       <label class="f">Celular (WhatsApp) <span class="hint">(para pedirle aprobación cuando no esté en la tienda)</span><input class="inp" name="telefono" inputmode="tel" value="${esc(s?.telefono || (esD ? sesion.optica?.telefono || '' : ''))}" maxlength="20"></label>
       ${esD ? `<p class="muted small" style="margin:0">Rol: <b>Dueño</b>. Puede hacer todo en el sistema. Entras con tu usuario <b>${esc(sesion.perfil?.usuario || '')}</b>.</p>` : `<div class="fld">Rol<div class="seg" id="prol"><button type="button" data-r="socio">Socio</button><button type="button" data-r="vendedor">Vendedor</button></div><div class="hint" id="prolh"></div></div>`}
+      ${esD ? '' : permisosHTML(s)}
       ${esD ? '' : `<label class="f" id="ppct">Porcentaje de la ganancia <span class="hint">(lo que falta para 100% queda para el dueño)</span><input class="inp" name="pct" inputmode="decimal" value="${s && socioRol(s) === 'socio' ? s.pct : ''}"></label>`}
       ${esD ? '' : conUsuario ? `<div class="fld">Usuario para entrar<div class="row between"><b>${esc(s.usuario)}</b><button type="button" class="btn sm" id="pnueva">Poner contraseña nueva</button></div>
           <label class="f" id="pclavebox" hidden>Contraseña nueva<input class="inp" name="clave" minlength="6" spellcheck="false" placeholder="Mínimo 6 caracteres"></label></div>`
-        : `<div class="fg"><label class="f">Usuario para entrar<input class="inp" name="usuario" required minlength="3" maxlength="30" pattern="[A-Za-z0-9._\-]+" autocapitalize="none" spellcheck="false" placeholder="Ej. juan.perez"></label>
+        : `<div class="fg"><label class="f">Usuario para entrar<input class="inp" name="usuario" required minlength="3" maxlength="30" pattern="[A-Za-z0-9._\\-]+" autocapitalize="none" spellcheck="false" placeholder="Ej. juan.perez"></label>
           <label class="f">Contraseña<input class="inp" name="clave" required minlength="6" spellcheck="false" placeholder="Mínimo 6 caracteres"></label></div>`}
       <label class="f" id="ppin">${s && s.pin ? 'Nueva clave de autorización <span class="hint">(vacía = no cambiar)</span>' : 'Clave de autorización <span class="hint">(opcional: si la dejas vacía, la crea él al entrar)</span>'}<input class="inp" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" placeholder="4 a 8 números"></label>
       <div class="err" id="pferr"></div></form>`,
@@ -3388,10 +3459,12 @@ function personaForm(s) {
         $$('#prol button', bg).forEach(b => b.classList.toggle('on', b.dataset.r === rol));
         $('#ppct', bg) && ($('#ppct', bg).hidden = rol !== 'socio');
         $('#ppin', bg).hidden = !esD && rol === 'vendedor';
-        $('#prolh', bg) && ($('#prolh', bg).textContent = rol === 'socio' ? 'Todo menos Ajustes. Autoriza cambios delicados con su clave y recibe su parte de la ganancia.' : 'Pacientes, ventas, cobros, caja del día y agregar mercadería. No ve costos, ganancias ni reportes, y no da descuentos.');
+        $('#prolh', bg) && ($('#prolh', bg).textContent = rol === 'socio' ? 'Es dueño de una parte: autoriza cambios delicados con su clave y recibe su parte de la ganancia.' : 'Trabaja en la óptica: no recibe ganancia ni autoriza cambios con clave.');
       };
-      $$('#prol button', bg).forEach(b => b.onclick = () => { rol = b.dataset.r; pintar(); });
+      $$('#prol button', bg).forEach(b => b.onclick = () => { rol = b.dataset.r; if (!tocados) $$('[data-perm]', bg).forEach(c => { c.checked = PERMISOS_ROL[rol].includes(c.dataset.perm); }); pintar(); });
       $('#pnueva', bg) && ($('#pnueva', bg).onclick = () => { cambiarClave = true; $('#pclavebox', bg).hidden = false; $('#pnueva', bg).hidden = true; $('[name=clave]', bg).required = true; $('[name=clave]', bg).focus(); });
+      $$('[data-preset]', bg).forEach(b => b.onclick = () => { const l = b.dataset.preset === 'todo' ? PERMISO_KEYS : PERMISOS_ROL[b.dataset.preset]; $$('[data-perm]', bg).forEach(c => { c.checked = l.includes(c.dataset.perm); }); tocados = true; });
+      $$('[data-perm]', bg).forEach(c => c.onchange = () => { tocados = true; });
       pintar();
       const repartir = (quien, pct) => {
         const otros = autorizantes().filter(x => x.id !== dueno().id && x !== quien).reduce((t, x) => t + num(x.pct), 0);
@@ -3416,6 +3489,7 @@ function personaForm(s) {
           Object.assign(p, { uid: acceso.uid, usuario: acceso.usuario });
         }
         Object.assign(p, { nombre: f.nombre, rol: r, pct: esD ? p.pct : pct, telefono: (f.telefono || '').trim() });
+        if (!esD) p.permisos = $$('[data-perm]', bg).filter(c => c.checked).map(c => c.dataset.perm);
         if (f.pin && r !== 'vendedor') p.pin = hashPin(f.pin);
         if (!s) db.config.socios.push(p);
         if (resto !== null) dueno().pct = resto;
@@ -3501,7 +3575,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.24.3';
+const APP_VERSION = '2026.09.24.4';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {

@@ -200,6 +200,10 @@ textarea.inp{min-height:76px;resize:vertical}
 .pay-opts input:checked + span{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-2)}
 .fld{display:grid;gap:6px;font-size:13px;font-weight:600;color:var(--ink-2)}
 .fld[hidden]{display:none}
+.perms{display:grid;gap:10px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--line-2)}
+.perm-g{display:grid;gap:2px}
+.perm{display:flex;align-items:flex-start;gap:9px;font-weight:500;font-size:13.5px;color:var(--ink);padding:5px 0;cursor:pointer}
+.perm input{width:18px;height:18px;margin:1px 0 0;flex:none;accent-color:var(--accent)}
 .lcolor{display:grid;gap:10px;padding-top:10px;border-top:1px dashed var(--line)}
 .lcolor[hidden]{display:none}
 .lcolor .seg{justify-self:start}
@@ -575,6 +579,10 @@ button.lnk{background:none;border:0;padding:0;cursor:pointer;font-size:13px}
 .lmat td button.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-2)}
 .lmat tr.auto td button{border-color:#86d9b4}
 .lmat td button small{display:none}
+.lmat td button.hl{border-color:#f59e0b;background:#fff4de;box-shadow:0 0 0 3px rgba(245,158,11,.18)}
+.lrefl{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.lrefl .seg button{padding:5px 12px;font-size:13px}
+#lres a b.num{white-space:nowrap;margin-left:10px}
 @media all{
   .lmat-w{overflow:visible;margin:0}
   .lmat,.lmat tbody{display:block;min-width:0}
@@ -829,7 +837,7 @@ tbody tr.link:hover td{background:var(--surface-2)}
 <body>
 <div id="root"></div>
 <div id="print"></div>
-<script type="module" src="nube.js?v=2026.09.24.3"></script>
-<script src="app.js?v=2026.09.24.3"></script>
+<script type="module" src="nube.js?v=2026.09.24.4"></script>
+<script src="app.js?v=2026.09.24.4"></script>
 </body>
 </html>
