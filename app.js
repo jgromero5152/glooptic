@@ -91,7 +91,7 @@ const I = {
 };
 const TILE = { inicio: '#1e4fea', pacientes: '#0891b2', ordenes: '#7c3aed', caja: '#059669', movimientos: '#d97706', reportes: '#4f46e5', inventario: '#c026d3', recordatorios: '#e11d48', ajustes: '#475569', mas: '#475569' };
 // Encabezado de la barra superior: [antetítulo, título] por sección.
-const CABECERA = { inicio: ['Resumen del día', 'Inicio'], pacientes: ['Fichas y medidas', 'Pacientes'], paciente: ['Pacientes', 'Ficha del paciente'], ordenes: ['Laboratorio y entregas', 'Pedidos'], orden: ['Pedidos', 'Detalle del pedido'], 'nueva-orden': ['Vender', 'Nueva venta'], caja: ['Cobros y gastos', 'Caja del día'], movimientos: ['Entradas y salidas', 'Ingresos y egresos'], reportes: ['Cómo va la óptica', 'Reportes'], inventario: ['Stock', 'Inventario'], recordatorios: ['Clientes para llamar', 'Recordatorios'], ajustes: ['Tu óptica', 'Ajustes'], aprobar: ['Autorización', 'Aprobar pedido'] };
+const CABECERA = { inicio: ['Resumen del día', 'Inicio'], pacientes: ['Fichas y medidas', 'Pacientes'], paciente: ['Pacientes', 'Ficha del paciente'], ordenes: ['Laboratorio y entregas', 'Pedidos'], orden: ['Pedidos', 'Detalle del pedido'], 'nueva-orden': ['Vender', 'Nueva venta'], caja: ['Cobros y gastos', 'Caja del día'], movimientos: ['Entradas y salidas', 'Ingresos y egresos'], reportes: ['Cómo va la óptica', 'Reportes'], contador: ['Reportes', 'Reporte para el contador'], inventario: ['Stock', 'Inventario'], recordatorios: ['Clientes para llamar', 'Recordatorios'], ajustes: ['Tu óptica', 'Ajustes'], aprobar: ['Autorización', 'Aprobar pedido'] };
 const tile = (k, i) => `<span class="tile" style="--c:${TILE[k]}">${icon(i)}</span>`;
 const icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${I[n] || ''}</svg>`;
 
@@ -380,7 +380,7 @@ const PERMISOS_ROL = {
 };
 const permisosDe = s => socioRol(s) === 'dueno' ? PERMISO_KEYS : Array.isArray(s?.permisos) ? s.permisos : PERMISOS_ROL[socioRol(s)];
 const puede = accion => !PERMISO_KEYS.includes(accion) || permisosDe(me()).includes(accion);
-const puedeVer = k => k === 'movimientos' ? puede('gastos') || puede('vales') : puede(k);
+const puedeVer = k => k === 'movimientos' ? puede('gastos') || puede('vales') : k === 'contador' ? puede('reportes') : puede(k);
 const paciente = id => db.pacientes.find(p => p.id === id);
 const orden = id => db.ordenes.find(o => o.id === id);
 // Nombre para mostrar: el paciente, o el cliente de una venta rápida (sin paciente registrado).
@@ -551,7 +551,7 @@ function shell(key, content) {
   const pend = db.ordenes.filter(o => o.estado !== 'entregado').length, atr = db.ordenes.filter(diasAtraso).length;
   const badge = k => k === 'recordatorios' && recs ? `<span class="badge">${recs}</span>` : k === 'ordenes' && atr ? `<span class="badge red">${atr} ${atr === 1 ? 'atrasado' : 'atrasados'}</span>` : k === 'ordenes' && pend ? `<span class="badge">${pend}</span>` : '';
   const [cabE, cabT] = CABECERA[key] || ['', ''];
-  const active = k => (k === key || (k === 'pacientes' && key === 'paciente') || (k === 'ordenes' && key === 'orden')) ? 'on' : '';
+  const active = k => (k === key || (k === 'pacientes' && key === 'paciente') || (k === 'ordenes' && key === 'orden') || (k === 'reportes' && key === 'contador')) ? 'on' : '';
   const u = me();
   return `<div class="app">
     <aside class="side">
@@ -1446,7 +1446,7 @@ function wrapText(x, t, a, y, max, lh) { let line = ''; for (const w of t.split(
 
 // ---------- Órdenes ----------
 // Vista "Tablero" (columnas por estado, se arrastran) o "Lista" (tabla con filtros).
-let ordFiltro = 'activas', tabFiltro = 'todos', ordBusca = '';
+let ordFiltro = 'activas', tabFiltro = 'todos', ordBusca = '', ordDesde = '', ordHasta = '';
 let ordVista = (() => { try { return localStorage.getItem('terra-ord-vista') || 'tablero'; } catch (e) { return 'tablero'; } })();
 const COLS_TABLERO = [['pendiente', 'En laboratorio', '#7c3aed'], ['listo', 'Listo para recoger', '#0891b2'], ['entregado', 'Entregado', '#079455']];
 const diasAtraso = o => o.estado === 'pendiente' && o.entrega && o.entrega < hoy() ? diasEntre(o.entrega, hoy()) : 0;
@@ -1499,7 +1499,11 @@ routes.ordenes = {
         <input class="inp" id="of" style="flex:1;min-width:200px" placeholder="N° de orden, nombre o teléfono…" value="${esc(ordBusca)}"></div><div id="kan" class="kan"></div>`;
     }
     return head + `<div class="card"><div class="card-b row wrap" style="padding-bottom:8px"><div class="seg" id="oseg">${[['activas', 'Por entregar'], ['listo', 'Listas'], ['deuda', 'Con saldo'], ['todas', 'Todas']].map(([k, t]) => `<button data-k="${k}" class="${k === ordFiltro ? 'on' : ''}">${t}</button>`).join('')}</div>
-      <input class="inp" id="of" style="flex:1;min-width:200px" placeholder="N° de orden, nombre o teléfono…" value="${esc(ordBusca)}"></div><div id="olist"></div></div>`;
+      <input class="inp" id="of" style="flex:1;min-width:200px" placeholder="N° de orden, nombre o teléfono…" value="${esc(ordBusca)}"></div>
+      <div class="card-b ofechas"><form id="ofd" class="rg-f"><label class="f">Desde<input class="inp" type="date" name="a" value="${ordDesde}" max="${hoy()}"></label>
+        <label class="f">Hasta<input class="inp" type="date" name="b" value="${ordHasta}" max="${hoy()}"></label><button class="btn primary">Ver</button></form>
+        <div class="pick" id="ofr"></div></div>
+      <div id="ores" class="ores"></div><div id="olist"></div></div>`;
   },
   bind() {
     $$('#ovista button').forEach(b => b.onclick = () => { ordVista = b.dataset.v; try { localStorage.setItem('terra-ord-vista', ordVista); } catch (e) { } render(); });
@@ -1545,8 +1549,15 @@ routes.ordenes = {
     const draw = () => {
       const [f, d] = filtroTexto();
       const list = db.ordenes.filter(o => ordFiltro === 'todas' || (ordFiltro === 'activas' && o.estado !== 'entregado') || (ordFiltro === 'listo' && o.estado === 'listo') || (ordFiltro === 'deuda' && saldoOrden(o) > 0.009))
-        .filter(o => buscaOrden(o, f, d))
+        .filter(o => buscaOrden(o, f, d) && (!ordDesde || o.fecha >= ordDesde) && (!ordHasta || o.fecha <= ordHasta))
         .sort((a, b) => b.numero - a.numero);
+      // Atajos de fechas y resumen de lo que se ve (cuántas ventas, cuánto suman y cuánto falta cobrar).
+      const mes = hoy().slice(0, 8) + '01', finAnt = addDays(mes, -1);
+      $('#ofr').innerHTML = [['Todas las fechas', '', ''], ['Hoy', hoy(), hoy()], ['Ayer', addDays(hoy(), -1), addDays(hoy(), -1)], ['7 días', addDays(hoy(), -6), hoy()], ['Este mes', mes, hoy()], ['Mes pasado', finAnt.slice(0, 8) + '01', finAnt]]
+        .map(([t, a, b]) => `<button type="button" data-a="${a}" data-b="${b}" class="${a === ordDesde && b === ordHasta ? 'on' : ''}">${t}</button>`).join('');
+      $$('#ofr button').forEach(b => b.onclick = () => { ordDesde = b.dataset.a; ordHasta = b.dataset.b; $('#ofd [name=a]').value = ordDesde; $('#ofd [name=b]').value = ordHasta; draw(); });
+      const tot = round2(list.reduce((x, o) => x + totalOrden(o), 0)), sal = round2(list.reduce((x, o) => x + Math.max(0, saldoOrden(o)), 0));
+      $('#ores').innerHTML = list.length ? `<span><b>${list.length}</b> ${list.length === 1 ? 'venta' : 'ventas'}${ordDesde || ordHasta ? ` · ${ordDesde === ordHasta ? fdate(ordDesde) : `${ordDesde ? fdate(ordDesde) : 'el inicio'} al ${fdate(ordHasta || hoy())}`}` : ''}</span><span>Total <b class="num">${money(tot)}</b></span>${sal > 0.009 ? `<span>Falta cobrar <b class="num" style="color:var(--danger)">${money(sal)}</b></span>` : ''}` : '';
       $('#olist').innerHTML = list.length ? `<div class="tbl-wrap"><table><thead><tr><th>N°</th><th>Paciente</th><th class="hide-sm">Fecha</th><th class="hide-sm">Entrega</th><th class="r">Total</th><th class="r">Saldo</th><th>Estado</th></tr></thead><tbody>
         ${list.map(o => { const s = saldoOrden(o); return `<tr class="link" data-h="#/orden/${o.id}"><td class="ordnum">${pad(o.numero)}</td><td><b>${esc(nombreDe(o))}</b><div class="muted small">${esc(o.items.map(i => i.desc).join(' · ')).slice(0, 60)}</div></td>
         <td class="hide-sm">${fdate(o.fecha)}</td><td class="hide-sm">${o.entrega ? fdate(o.entrega) : '—'}</td><td class="r num">${money(totalOrden(o))}</td><td class="r num" style="${s > 0.009 ? 'color:var(--danger);font-weight:600' : ''}">${s > 0.009 ? money(s) : '—'}</td><td>${estadoChip(o)}</td></tr>`; }).join('')}</tbody></table></div>`
@@ -1554,6 +1565,7 @@ routes.ordenes = {
       $$('[data-h]').forEach(r => r.onclick = () => go(r.dataset.h));
     };
     $$('#oseg button').forEach(b => b.onclick = () => { ordFiltro = b.dataset.k; $$('#oseg button').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+    $('#ofd').onsubmit = e => { e.preventDefault(); const f = readForm(e.target); [ordDesde, ordHasta] = f.a && f.b && f.a > f.b ? [f.b, f.a] : [f.a, f.b]; draw(); };
     $('#of').oninput = () => { ordBusca = $('#of').value; draw(); }; draw();
   },
 };
@@ -1931,7 +1943,7 @@ function cobrarForm(o, luego) {
   const s = saldoOrden(o);
   const fechaCerrada = cerrado(hoy());
   modal({
-    title: `Cobrar · ${esc(nombreDe(o))} · N° ${pad(o.numero)}`,
+    title: `Cobrar · Orden N° ${pad(o.numero)}`,
     body: `<form id="cf" class="form">${fechaCerrada ? `<div class="lock-note">${icon('lock')}<div>La caja de hoy ya está cerrada; se pedirá la clave de ambos socios.</div></div>` : ''}
       <div class="row between"><span class="muted">Saldo pendiente</span><b class="num" style="font-size:20px">${money(s)}</b></div>
       <label class="f">Monto<input class="inp" name="monto" inputmode="decimal" value="${s.toFixed(2)}" required></label>
@@ -2564,8 +2576,8 @@ const noAnulable = () => toast(`Solo se puede anular lo de los últimos ${DIAS_A
 const vivo = x => !x.anulado;
 const CAT_VALE = 'Ganancia del dueño y socios'; // se descuenta de la parte de esa persona en la caja (antes "vale")
 const CAT_EGRESO = [['Sueldos', 'users'], ['Gastos', 'cash'], ['Compras de mercadería', 'box'], ['Laboratorio', 'eye'], [CAT_VALE, 'wallet'], ['Otros egresos', 'apps']];
-const CAT_DEUDA = 'Pago de deuda', CAT_ANTIGUA = 'Deuda antigua';
-const CAT_INGRESO = [[CAT_ANTIGUA, 'clock'], [CAT_DEUDA, 'wallet'], ['Otros ingresos', 'trend'], ['Aporte del dueño o socios', 'users'], ['Préstamo', 'cash']];
+const CAT_ANTIGUA = 'Deuda antigua'; // cliente que debía de antes del sistema: solo entra a la caja, no crea venta
+const CAT_INGRESO = [[CAT_ANTIGUA, 'clock'], ['Otros ingresos', 'trend'], ['Aporte del dueño o socios', 'users'], ['Préstamo', 'cash']];
 const SIN_GANANCIA = ['Aporte del dueño o socios', 'Préstamo']; // entran a la caja pero no son ganancia
 const ganaIngreso = x => !SIN_GANANCIA.includes(x.categoria);
 // Las tres colecciones (ingresos, gastos y vales) vistas como una sola lista.
@@ -2577,9 +2589,6 @@ function movimientos() {
   ].map(m => ({ ...m, fecha: m.x.fecha, monto: num(m.x.monto), ts: m.x.ts || 0, por: m.x.por })).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.ts - a.ts);
 }
 const puedeMov = m => m.col === 'vales' ? puede('vales') : puede('gastos');
-const pagosDeuda = () => db.pagos.filter(p => p.tipo === 'saldo').map(p => { const o = orden(p.ordenId); return { x: p, col: 'pagos', tipo: 'ingreso', cat: CAT_DEUDA, det: o ? `${nombreDe(o)} · Pedido N° ${pad(o.numero)}` : '', href: o ? '#/orden/' + o.id : '', metodo: p.metodo || 'Efectivo', fecha: p.fecha, monto: num(p.monto), ts: p.ts || 0, por: p.por }; });
-// Pedidos que deben, para cobrar desde "Ingreso → Pago de deuda".
-const deudores = () => db.ordenes.filter(o => saldoOrden(o) > 0.009).sort((a, b) => nombreDe(a).localeCompare(nombreDe(b)));
 function movimientoForm(tipo, cat) {
   const d = hoy(), ing = tipo === 'ingreso';
   const lista = (ing ? CAT_INGRESO : CAT_EGRESO).filter(([c]) => c === CAT_VALE ? puede('vales') : puede('gastos'));
@@ -2591,9 +2600,6 @@ function movimientoForm(tipo, cat) {
     title: ing ? 'Registrar ingreso' : 'Registrar egreso',
     body: `<form id="mf" class="form"><div class="lock-note mv-hoy">${icon('clock')}<div>Se anota con fecha de <b>hoy, ${fdate(d)}</b>.</div></div>
       <div class="fld">Categoría<div class="pick mv-cats" id="mcats">${lista.map(([c, i]) => `<button type="button" data-c="${esc(c)}">${icon(i)} ${esc(c)}</button>`).join('')}${propias.map(c => `<button type="button" data-c="${esc(c)}">${esc(c)}</button>`).join('')}${puede('gastos') ? `<button type="button" data-c="" id="motra">${icon('plus')} Otra…</button>` : ''}</div></div>
-      ${ing ? `<div id="mdeuda" style="display:none"><div class="search" style="max-width:none">${icon('search')}<input id="mdq" placeholder="Nombre, celular o N° de pedido…" autocomplete="off"></div>
-        <div class="mdl" id="mdl"></div><button type="button" class="btn sm ghost" id="mant">${icon('clock')} No está en el sistema (deuda de antes)</button></div>` : ''}
-      <label class="f" id="mcli" style="display:none">¿Quién paga?<input class="inp" name="cliente" autocomplete="off" placeholder="Nombre del cliente"></label>
       <label class="f" id="mnueva" style="display:none">Nombre de la categoría<input class="inp" name="nueva" maxlength="40" placeholder="${ing ? 'Ej. Alquiler de consultorio' : 'Ej. Publicidad, movilidad…'}"></label>
       <label class="f" id="mper" style="display:none">¿Para quién?<select class="inp" name="socioId">${autorizantes().map(s => `<option value="${s.id}" ${s.id === user ? 'selected' : ''}>${esc(s.nombre)}</option>`).join('')}</select><span class="hint">Se descuenta de la ganancia de esa persona en la caja.</span></label>
       <label class="f">Monto<input class="inp" name="monto" inputmode="decimal" required placeholder="0.00"></label>
@@ -2602,26 +2608,14 @@ function movimientoForm(tipo, cat) {
       <p class="hint" id="mhint" style="margin:0"></p></form>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn ${ing ? 'mv-ing' : 'primary mv-egr'}" form="mf">${icon('check')} Guardar ${ing ? 'ingreso' : 'egreso'}</button>`,
     onMount: bg => {
-      const resto = $$('#mf > :not(.mv-hoy):not(.fld):not(#mdeuda)', bg).concat($$('.modal-f [form=mf]', bg.closest('.modal-bg') || bg));
-      const lista = () => {
-        const q = sinTilde($('#mdq', bg).value.trim()), dg = q.replace(/\D/g, '');
-        const ds = deudores().filter(o => { const p = paciente(o.pacienteId); return !q || sinTilde(nombreDe(o)).includes(q) || (dg && (String(p?.telefono || '').replace(/\D/g, '').includes(dg) || String(o.numero) === String(+dg))); });
-        $('#mdl', bg).innerHTML = ds.length ? ds.slice(0, 40).map(o => `<button type="button" class="mdi" data-o="${o.id}"><span class="ini">${initials(nombreDe(o))}</span><span class="grow"><b>${esc(nombreDe(o))}</b><small>Pedido N° ${pad(o.numero)} · ${fdate(o.fecha)}</small></span><span class="chip deuda num">Debe ${money(saldoOrden(o))}</span></button>`).join('')
-          : `<div class="empty small" style="padding:14px">${deudores().length ? 'Nadie con ese nombre debe.' : 'Nadie debe en el sistema.'} Si la deuda es de antes del sistema, toca el botón de abajo.</div>`;
-        $$('[data-o]', bg).forEach(b => b.onclick = () => { closeModal(); cobrarForm(orden(b.dataset.o)); });
-      };
       const pintar = () => {
         $$('#mcats button', bg).forEach(b => b.classList.toggle('on', b.dataset.c === cat));
-        const dd = cat === CAT_DEUDA;
-        if ($('#mdeuda', bg)) { $('#mdeuda', bg).style.display = dd ? '' : 'none'; resto.forEach(el => el.style.display = dd ? 'none' : ''); if (dd) lista(); }
-        $('#mcli', bg).style.display = 'none';
         $('[name=obs]', bg).placeholder = cat === CAT_ANTIGUA ? 'Ej. Abono de S/ 100 de Carmen Ruiz' : ing ? 'Ej. Jorge puso sencillo para la caja' : 'Ej. Sueldo de Ana, recibo de luz de setiembre…';
         $('#mobs', bg).textContent = cat === CAT_ANTIGUA ? '(de quién es el abono)' : '(opcional)';
         $('#mnueva', bg).style.display = cat === '' ? '' : 'none'; $('#mper', bg).style.display = cat === CAT_VALE ? '' : 'none';
-        $('#mhint', bg).textContent = ing ? (SIN_GANANCIA.includes(cat) ? 'Entra a la caja, pero no se cuenta como ganancia.' : cat === CAT_ANTIGUA ? 'Para clientes que deben de antes del sistema: no crea ninguna venta, solo entra a la caja. Si la deuda está en el sistema, usa "Pago de deuda".' : 'Entra a la caja y suma a la ganancia del día.') : cat === CAT_VALE ? '' : 'Sale de la caja y se resta de la ganancia del día.';
+        $('#mhint', bg).textContent = ing ? (SIN_GANANCIA.includes(cat) ? 'Entra a la caja, pero no se cuenta como ganancia.' : cat === CAT_ANTIGUA ? 'Para clientes que deben de antes del sistema: no crea ninguna venta, solo entra a la caja.' : 'Entra a la caja y suma a la ganancia del día.') : cat === CAT_VALE ? '' : 'Sale de la caja y se resta de la ganancia del día.';
       };
       $$('#mcats button', bg).forEach(b => b.onclick = () => { cat = b.dataset.c; pintar(); if (cat === '') $('[name=nueva]', bg).focus(); if (cat === CAT_ANTIGUA) $('[name=monto]', bg).focus(); });
-      if ($('#mdq', bg)) { $('#mdq', bg).oninput = lista; $('#mant', bg).onclick = () => { cat = CAT_ANTIGUA; pintar(); $('[name=monto]', bg).focus(); }; }
       pintar();
       $('#mf', bg).onsubmit = e => {
         e.preventDefault();
@@ -2629,11 +2623,10 @@ function movimientoForm(tipo, cat) {
         const nueva = String(f.nueva || '').trim().replace(/\s+/g, ' '), categoria = cat === '' ? nueva.charAt(0).toUpperCase() + nueva.slice(1) : cat;
         if (monto <= 0) return toast('Escribe el monto');
         if (!categoria) return toast('Escribe el nombre de la categoría');
-        if (categoria === CAT_DEUDA) return;
         if (categoria === CAT_ANTIGUA && !obs) return toast('En la observación escribe de quién es el abono');
         const base = { id: uid(), fecha: d, monto, metodo: f.metodo, por: user, ts: Date.now() };
         const guardar = () => {
-          if (ing) db.ingresos.push({ ...base, categoria, obs, ...(categoria === CAT_ANTIGUA ? { cliente: String(f.cliente || '').trim() } : {}) });
+          if (ing) db.ingresos.push({ ...base, categoria, obs });
           else if (categoria === CAT_VALE) db.vales.push({ ...base, socioId: f.socioId, concepto: obs });
           else db.gastos.push({ ...base, categoria, concepto: obs || categoria, obs });
           save(); closeModal(); toast(`${ing ? 'Ingreso' : 'Egreso'} de ${money(monto)} registrado`); render();
@@ -2653,7 +2646,7 @@ const movFila = (m, conFecha) => `<tr class="${m.x.anulado ? 'mv-anul' : ''}">${
   <td><span class="mv-t ${m.tipo}">${m.tipo === 'ingreso' ? '+' : '−'}</span><b>${esc(m.cat)}</b>${m.persona ? ` · ${esc(socioName(m.persona))}` : ''}${m.det && m.det !== m.cat ? `<div class="small mv-det">${esc(m.det)}</div>` : ''}
     <div class="muted small">${esc(m.metodo)} · anotó ${esc(socioName(m.por))}${m.x.anulado ? ` · <b style="color:var(--danger)">Anulado</b> por ${esc(socioName(m.x.anulado.por))} el ${fdate(ymd(new Date(m.x.anulado.ts)), { day: 'numeric', month: 'short' })}` : ''}</div></td>
   <td class="r num strong nowrap" style="color:${m.x.anulado ? 'var(--muted)' : m.tipo === 'ingreso' ? 'var(--ok)' : 'var(--danger)'}">${m.tipo === 'ingreso' ? '+' : '−'} ${money(m.monto)}</td>
-  <td style="width:40px">${m.col === 'pagos' ? `<a class="btn ghost icon sm" href="${m.href}" title="Ver pedido">${icon('eye')}</a>` : !m.x.anulado && puedeMov(m) && anulable(m.fecha) ? `<button class="btn ghost icon sm" data-manul="${m.col}:${m.x.id}" title="Anular">${icon('trash')}</button>` : ''}</td></tr>`;
+  <td style="width:40px">${!m.x.anulado && puedeMov(m) && anulable(m.fecha) ? `<button class="btn ghost icon sm" data-manul="${m.col}:${m.x.id}" title="Anular">${icon('trash')}</button>` : ''}</td></tr>`;
 function bindAnularMov(root = document) {
   $$('[data-manul]', root).forEach(b => b.onclick = () => { const [col, id] = b.dataset.manul.split(':'); const m = movimientos().find(x => x.col === col && x.x.id === id); if (m) anularMovimiento(m); });
 }
@@ -2664,27 +2657,27 @@ routes.movimientos = {
     if (a > b) [a, b] = [b, a];
     const t = ['ingreso', 'egreso'].includes(q.get('t')) ? q.get('t') : '', c = q.get('c') || '', verAnul = q.get('x') === '1';
     const url = (o = {}) => { const p = new URLSearchParams({ a, b, t, c, x: verAnul ? '1' : '', ...o }); [...p.keys()].forEach(k => !p.get(k) && p.delete(k)); return '#/movimientos?' + p; };
-    const todos = [...movimientos().filter(puedeMov), ...pagosDeuda()].filter(m => m.fecha >= a && m.fecha <= b).sort((x, y) => y.fecha.localeCompare(x.fecha) || y.ts - x.ts);
+    const todos = movimientos().filter(m => puedeMov(m) && m.fecha >= a && m.fecha <= b);
     const cats = [...new Set(todos.filter(m => !t || m.tipo === t).map(m => m.cat))].sort();
     const lista = todos.filter(m => (!t || m.tipo === t) && (!c || m.cat === c) && (verAnul || !m.x.anulado));
     const vivos = todos.filter(m => !m.x.anulado), deTipo = k => vivos.filter(m => m.tipo === k); // los totales son de todas las fechas elegidas, sin filtro
     const tIng = round2(deTipo('ingreso').reduce((s, m) => s + m.monto, 0)), tEgr = round2(deTipo('egreso').reduce((s, m) => s + m.monto, 0));
-    const ventas = round2(db.pagos.filter(p => p.tipo !== 'saldo' && p.fecha >= a && p.fecha <= b).reduce((s, p) => s + num(p.monto), 0)); // lo cobrado al vender; los pagos de deuda van en ingresos
+    const ventas = round2(db.pagos.filter(p => p.fecha >= a && p.fecha <= b).reduce((s, p) => s + num(p.monto), 0));
     const porCat = {}; vivos.forEach(m => { const k = m.tipo + '|' + m.cat; porCat[k] = (porCat[k] || 0) + m.monto; });
     const catFilas = Object.entries(porCat).map(([k, v]) => { const [tp, n] = k.split('|'); return { tp, n, v: round2(v) }; }).sort((x, y) => (x.tp === y.tp ? 0 : x.tp === 'ingreso' ? -1 : 1) || y.v - x.v);
     const nAnul = todos.filter(m => m.x.anulado && (!t || m.tipo === t) && (!c || m.cat === c)).length;
     const mes = hoy().slice(0, 8) + '01', finAnt = addDays(mes, -1);
     const rapidos = [['Hoy', hoy(), hoy()], ['Ayer', addDays(hoy(), -1), addDays(hoy(), -1)], ['7 días', addDays(hoy(), -6), hoy()], ['30 días', addDays(hoy(), -29), hoy()], ['Este mes', mes, hoy()], ['Mes pasado', finAnt.slice(0, 8) + '01', finAnt]];
     const plural = (n, s) => `${n} ${s}${n === 1 ? '' : 's'}`;
-    return `<div class="page-head"><div><h1>Ingresos y egresos</h1><p>Pagos de deudas, sueldos, gastos, compras, ganancia de los socios y otros ingresos. Se anotan el mismo día.</p></div>
+    return `<div class="page-head"><div><h1>Ingresos y egresos</h1><p>Sueldos, gastos, compras, ganancia de los socios, abonos de deudas antiguas y otros ingresos. Se anotan el mismo día.</p></div>
       <div class="actions">${puede('gastos') ? `<button class="btn mv-ing" data-nuevo="ingreso">${icon('plus')} Ingreso</button>` : ''}<button class="btn primary mv-egr" data-nuevo="egreso">${icon('plus')} Egreso</button></div></div>
       <div class="card card-b rango"><form id="mvf" class="rg-f"><label class="f">Desde<input class="inp" type="date" name="a" value="${a}" max="${hoy()}" required></label>
         <label class="f">Hasta<input class="inp" type="date" name="b" value="${b}" max="${hoy()}" required></label><button class="btn primary">Ver</button></form>
         <div class="pick">${rapidos.map(([n, x, y]) => `<button type="button" data-go="${url({ a: x, b: y })}" class="${x === a && y === b ? 'on' : ''}">${n}</button>`).join('')}</div></div>
       <div class="grid g4 mt">
-        <div class="card kpi" style="--c:#059669"><div class="l"><i>${icon('trend')}</i>Ingresos</div><div class="v num" style="color:var(--ok)">${money(tIng)}</div><div class="s">${(n => n ? `Pagos de deuda: ${money(n)}` : plural(deTipo('ingreso').length, 'movimiento'))(round2(deTipo('ingreso').filter(m => m.cat === CAT_DEUDA || m.cat === CAT_ANTIGUA).reduce((x, m) => x + m.monto, 0)))}</div></div>
+        <div class="card kpi" style="--c:#059669"><div class="l"><i>${icon('trend')}</i>Otros ingresos</div><div class="v num" style="color:var(--ok)">${money(tIng)}</div><div class="s">${plural(deTipo('ingreso').length, 'movimiento')}</div></div>
         <div class="card kpi" style="--c:#e11d48"><div class="l"><i>${icon('wallet')}</i>Egresos</div><div class="v num" style="color:var(--danger)">${money(tEgr)}</div><div class="s">${plural(deTipo('egreso').length, 'movimiento')}</div></div>
-        <div class="card kpi" style="--c:#1e4fea"><div class="l"><i>${icon('cash')}</i>Cobrado en ventas</div><div class="v num">${money(ventas)}</div><div class="s">Lo pagado al momento de vender</div></div>
+        <div class="card kpi" style="--c:#1e4fea"><div class="l"><i>${icon('cash')}</i>Cobrado en ventas</div><div class="v num">${money(ventas)}</div><div class="s">En las mismas fechas</div></div>
         <div class="card kpi" style="--c:#7c3aed"><div class="l"><i>${icon('bars')}</i>Queda</div><div class="v num">${money(ventas + tIng - tEgr)}</div><div class="s">Ventas + ingresos − egresos</div></div>
       </div>
       <div class="split mt mv-split">
@@ -3257,7 +3250,8 @@ routes.reportes = {
     return `<div class="page-head"><div><h1>Reportes</h1><p class="cap">${esc(P.label)}</p></div>
       <div class="actions"><div class="seg">${Object.entries(REP_PER).map(([k, t]) => `<button type="button" data-go="${k === 'rango' ? url(k, P.a, hoyOAntes(P.b)) : url(k, ref)}" class="${k === p ? 'on' : ''}">${t}</button>`).join('')}</div>
         <a class="btn icon" href="${url(p, P.prev, P.prevB)}" title="Anterior">${icon('back')}</a><a class="btn icon" href="${url(p, P.next, P.nextB)}" title="Siguiente" style="transform:scaleX(-1)">${icon('back')}</a>
-        ${enCurso || p === 'rango' ? '' : `<a class="btn" href="${url(p, hoy())}">Hoy</a>`}</div></div>
+        ${enCurso || p === 'rango' ? '' : `<a class="btn" href="${url(p, hoy())}">Hoy</a>`}
+        <a class="btn" href="#/contador">${icon('file')} Reporte para el contador</a></div></div>
       ${p === 'rango' ? `<div class="card card-b rango"><form id="rgf" class="rg-f"><label class="f">Desde<input class="inp" type="date" name="a" value="${P.a}" required></label>
         <label class="f">Hasta<input class="inp" type="date" name="b" value="${P.b}" required></label><button class="btn primary">Ver</button></form>
         <div class="pick">${[['Hoy', 0, 0], ['Ayer', 1, 1], ['Últimos 7 días', 6, 0], ['Últimos 30 días', 29, 0], ['Últimos 90 días', 89, 0]].map(([t, x, y]) => { const a = addDays(hoy(), -x), b = addDays(hoy(), -y); return `<button type="button" data-go="${url('rango', a, b)}" class="${a === P.a && b === P.b ? 'on' : ''}">${t}</button>`; }).join('')}</div></div>` : ''}
@@ -3299,6 +3293,108 @@ routes.reportes = {
     const bars = $('.bars'); bars && (bars.onmouseleave = () => { $$('.bcol').forEach(x => x.classList.remove('sel')); cap.textContent = base; });
   },
 };
+
+// Reporte para el contador: las boletas y facturas emitidas en un mes (registro de ventas).
+// Solo entran los comprobantes; las notas de venta y las ventas sin comprobante no.
+const DOC_SUNAT = { DNI: '1', RUC: '6', CE: '4' };
+const nombreMes = m => { const t = new Date(m + '-15T12:00:00').toLocaleDateString('es-PE', { month: 'long', year: 'numeric' }); return t.charAt(0).toUpperCase() + t.slice(1); };
+function contadorDatos(m) {
+  const cps = db.comprobantes.filter(c => c.tipo !== 'nota' && c.numero !== 0 && String(c.fecha).slice(0, 7) === m)
+    .sort((a, b) => a.fecha.localeCompare(b.fecha) || a.serie.localeCompare(b.serie) || a.numero - b.numero)
+    .map(c => ({ c, anul: c.estado === 'anulado', ...cpCalc(c) }));
+  const suma = (t, k) => round2(cps.filter(x => !x.anul && (!t || x.c.tipo === t)).reduce((s, x) => s + x[k], 0));
+  const cuenta = t => cps.filter(x => !x.anul && x.c.tipo === t).length;
+  return { cps, total: suma('', 'total'), gravada: suma('', 'gravada'), igv: suma('', 'igv'), bol: suma('boleta', 'total'), fac: suma('factura', 'total'), nBol: cuenta('boleta'), nFac: cuenta('factura'), nAnul: cps.filter(x => x.anul).length };
+}
+routes.contador = {
+  html(_, q) {
+    const mesHoy = hoy().slice(0, 7), mesAnt = addDays(mesHoy + '-01', -1).slice(0, 7);
+    const m = /^\d{4}-\d{2}$/.test(q.get('m') || '') ? q.get('m') : mesHoy, R = contadorDatos(m), F = fact();
+    const docTxt = c => c.cliente?.doc ? `${c.cliente.docTipo || 'Doc.'} ${esc(c.cliente.doc)}` : '<span class="muted">Sin documento</span>';
+    return `<div class="page-head"><div><h1>Reporte para el contador</h1><p class="cap">${esc(nombreMes(m))} · boletas y facturas emitidas</p></div>
+      <div class="actions"><a class="btn" href="#/reportes">${icon('back')} Reportes</a>
+        ${puede('excel') ? `<button class="btn primary" id="ctxls" ${R.cps.length ? '' : 'disabled'}>${icon('down')} Descargar para Excel</button>` : ''}</div></div>
+      <div class="card card-b rango"><form id="ctf" class="rg-f"><label class="f">Mes<input class="inp" type="month" name="m" value="${m}" max="${mesHoy}" required></label><button class="btn primary">Ver</button></form>
+        <div class="pick">${[['Este mes', mesHoy], ['Mes pasado', mesAnt]].map(([t, x]) => `<button type="button" data-go="#/contador?m=${x}" class="${x === m ? 'on' : ''}">${t}</button>`).join('')}</div></div>
+      ${F.ruc ? '' : `<div class="lock-note" style="margin-bottom:14px">${icon('file')}<div>Tu RUC y razón social todavía no están en <a class="strong" href="#/ajustes">Ajustes → Boletas y facturas</a>. El reporte los muestra arriba para tu contador.</div></div>`}
+      <div class="grid g4">
+        <div class="card kpi"><div class="l"><i>${icon('file')}</i>Boletas</div><div class="v num">${money(R.bol)}</div><div class="s">${R.nBol} ${R.nBol === 1 ? 'boleta' : 'boletas'}</div></div>
+        <div class="card kpi ink"><div class="l"><i>${icon('file')}</i>Facturas</div><div class="v num">${money(R.fac)}</div><div class="s">${R.nFac} ${R.nFac === 1 ? 'factura' : 'facturas'}</div></div>
+        <div class="card kpi warn"><div class="l"><i>${icon('bars')}</i>Valor de venta</div><div class="v num">${money(R.gravada)}</div><div class="s">Sin IGV</div></div>
+        <div class="card kpi gold"><div class="l"><i>${icon('chart')}</i>IGV</div><div class="v num">${money(R.igv)}</div><div class="s">Total ${money(R.total)}</div></div>
+      </div>
+      <div class="card mt"><div class="card-h"><h3>Comprobantes del mes</h3>${R.nAnul ? `<span class="sub">${R.nAnul} ${R.nAnul === 1 ? 'anulado' : 'anulados'} (no suman)</span>` : ''}</div>
+        <div class="card-b tbl-wrap">${R.cps.length ? `<table class="mv-tbl"><thead><tr><th>Fecha</th><th>Comprobante</th><th>Cliente</th><th class="r">Valor de venta</th><th class="r">IGV</th><th class="r">Total</th></tr></thead><tbody>
+          ${R.cps.map(x => `<tr class="${x.anul ? 'mv-anul' : ''}"><td class="nowrap small">${fdate(x.c.fecha, { day: 'numeric', month: 'short' })}</td>
+            <td class="nowrap"><b>${cpNum(x.c)}</b><div class="muted small">${TIPOS_CP[x.c.tipo] || x.c.tipo}${x.anul ? ' · <b style="color:var(--danger)">Anulado</b>' : ''}</div></td>
+            <td>${esc(x.c.cliente?.nombre || 'CLIENTES VARIOS')}<div class="muted small">${docTxt(x.c)}</div></td>
+            <td class="r num">${money(x.anul ? 0 : x.gravada)}</td><td class="r num">${money(x.anul ? 0 : x.igv)}</td><td class="r num strong">${money(x.anul ? 0 : x.total)}</td></tr>`).join('')}</tbody></table>`
+        : `<div class="empty">No se emitieron boletas ni facturas en ${esc(nombreMes(m).toLowerCase())}.</div>`}</div></div>
+      <p class="hint" style="margin:10px 2px 0">Solo aparecen las boletas y facturas. Las notas de venta y las ventas sin comprobante no entran en este reporte.</p>`;
+  },
+  bind(_, q) {
+    $$('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
+    $('#ctf').onsubmit = e => { e.preventDefault(); const f = readForm(e.target); if (f.m) go('#/contador?m=' + f.m); };
+    const m = /^\d{4}-\d{2}$/.test(q.get('m') || '') ? q.get('m') : hoy().slice(0, 7);
+    $('#ctxls') && ($('#ctxls').onclick = () => contadorCSV(m));
+  },
+};
+function contadorCSV(m) {
+  const R = contadorDatos(m), F = fact();
+  const B = v => ({ v, s: 1 }), H = v => ({ v, s: 5 }), M = v => ({ v: round2(v), s: 2 }), MB = v => ({ v: round2(v), s: 3 });
+  const rows = [[{ v: `Registro de ventas · ${nombreMes(m)}`, s: 4 }], [B('RUC'), F.ruc || ''], [B('Razón social'), F.razon || db.config.nombre || ''], [],
+    ['Fecha', 'Tipo', 'Código SUNAT', 'Serie', 'Número', 'Tipo de documento', 'N° de documento', 'Cliente', 'Valor de venta', 'IGV', 'Total', 'Estado'].map(H)];
+  R.cps.forEach(x => {
+    const c = x.c, cl = c.cliente || {};
+    rows.push([c.fecha.split('-').reverse().join('/'), TIPOS_CP[c.tipo] || c.tipo, c.tipo === 'factura' ? '01' : '03', c.serie, String(c.numero).padStart(8, '0'),
+      cl.doc ? (DOC_SUNAT[cl.docTipo] || '0') : '0', cl.doc || '', cl.nombre || 'CLIENTES VARIOS',
+      M(x.anul ? 0 : x.gravada), M(x.anul ? 0 : x.igv), M(x.anul ? 0 : x.total), x.anul ? 'ANULADO' : 'EMITIDO']);
+  });
+  rows.push(['', '', '', '', '', '', '', B('TOTAL'), MB(R.gravada), MB(R.igv), MB(R.total)], [],
+    [B('Resumen'), B('Cantidad'), B('Total')], ['Boletas', R.nBol, M(R.bol)], ['Facturas', R.nFac, M(R.fac)]);
+  if (R.nAnul) rows.push(['Anulados', R.nAnul, M(0)]);
+  saveFile(`Reporte contador ${m}.xlsx`, xlsx(rows, [12, 16, 13, 8, 12, 17, 16, 34, 15, 12, 12, 11], 'Registro de ventas'));
+}
+
+// Excel (.xlsx) de una hoja, sin librerías. Celda: texto, número, o { v, s } con s = 1 negrita,
+// 2 monto, 3 monto en negrita, 4 título, 5 encabezado de tabla.
+function xlsx(rows, anchos, hoja) {
+  const x = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '');
+  const col = i => (i >= 26 ? String.fromCharCode(64 + Math.floor(i / 26)) : '') + String.fromCharCode(65 + i % 26);
+  const filas = rows.map((r, ri) => `<row r="${ri + 1}">${r.map((c, ci) => {
+    const o = c && typeof c === 'object' ? c : { v: c }, ref = col(ci) + (ri + 1), st = o.s ? ` s="${o.s}"` : '';
+    if (o.v === '' || o.v == null) return o.s ? `<c r="${ref}"${st}/>` : '';
+    return typeof o.v === 'number' ? `<c r="${ref}"${st}><v>${o.v}</v></c>` : `<c r="${ref}" t="inlineStr"${st}><is><t xml:space="preserve">${x(o.v)}</t></is></c>`;
+  }).join('')}</row>`).join('');
+  const X = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+  const files = {
+    '[Content_Types].xml': X + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>',
+    '_rels/.rels': X + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+    'xl/workbook.xml': X + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${x(hoja.slice(0, 31))}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    'xl/_rels/workbook.xml.rels': X + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+    'xl/styles.xml': X + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00"/></numFmts>'
+      + '<fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="14"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts>'
+      + '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF2563EB"/></patternFill></fill></fills>'
+      + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="6"><xf xfId="0"/><xf xfId="0" fontId="1" applyFont="1"/><xf xfId="0" numFmtId="164" applyNumberFormat="1"/><xf xfId="0" numFmtId="164" fontId="1" applyNumberFormat="1" applyFont="1"/><xf xfId="0" fontId="2" applyFont="1"/><xf xfId="0" fontId="3" fillId="2" applyFont="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>',
+    'xl/worksheets/sheet1.xml': X + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${anchos.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols><sheetData>${filas}</sheetData></worksheet>`,
+  };
+  return new Blob([zipStore(files)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+// ZIP sin compresión (suficiente para un .xlsx pequeño).
+function zipStore(files) {
+  const enc = new TextEncoder(), T = zipStore.t || (zipStore.t = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; }));
+  const crc = b => { let c = ~0; for (const y of b) c = T[(c ^ y) & 255] ^ (c >>> 8); return ~c >>> 0; };
+  const parts = [], dir = []; let off = 0;
+  for (const [name, txt] of Object.entries(files)) {
+    const n = enc.encode(name), d = enc.encode(txt), c = crc(d);
+    const h = new DataView(new ArrayBuffer(30)); [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x800, 2], [14, c, 4], [18, d.length, 4], [22, d.length, 4], [26, n.length, 2]].forEach(([o, v, l]) => l === 4 ? h.setUint32(o, v, true) : h.setUint16(o, v, true));
+    const e = new DataView(new ArrayBuffer(46)); [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x800, 2], [16, c, 4], [20, d.length, 4], [24, d.length, 4], [28, n.length, 2], [42, off, 4]].forEach(([o, v, l]) => l === 4 ? e.setUint32(o, v, true) : e.setUint16(o, v, true));
+    parts.push(h, n, d); dir.push(e, n); off += 30 + n.length + d.length;
+  }
+  const size = dir.reduce((s, p) => s + p.byteLength, 0), end = new DataView(new ArrayBuffer(22));
+  [[0, 0x06054b50, 4], [8, dir.length / 2, 2], [10, dir.length / 2, 2], [12, size, 4], [16, off, 4]].forEach(([o, v, l]) => l === 4 ? end.setUint32(o, v, true) : end.setUint16(o, v, true));
+  return new Blob([...parts, ...dir, end]);
+}
 
 // Dibujo de la montura según su forma, color y material (no hay fotos).
 const COLOR_MONT = { negro: '#1f2433', carey: '#8a5424', dorado: '#c39a2e', plateado: '#98a2b3', azul: '#2447c9', rosa: '#db5c9a', rosado: '#db5c9a', vino: '#8c1d3f', transparente: '#a9bad2', verde: '#1f6f52', blanco: '#c8ced9', gris: '#6b7280', marron: '#7a4a2a', rojo: '#c81e3a', amarillo: '#d4a514', naranja: '#e8742a', nude: '#d6a88c', jaspeado: '#8a6a4a', miel: '#c98a2e', morado: '#6d3bb8', celeste: '#4aa3df' };
@@ -3907,7 +4003,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.26.3';
+const APP_VERSION = '2026.09.26.4';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
