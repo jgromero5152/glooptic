@@ -338,6 +338,48 @@ function avisoSuscripcion() {
 const nombreRespaldo = ext => `respaldo-${(db.config.nombre || 'optica').toLowerCase().replace(/\s+/g, '-')}-${hoy()}.${ext}`;
 const respaldoHecho = () => { db.config.ultimoRespaldo = Date.now(); save(); render(); };
 async function descargarRespaldo() { if (await saveFile(nombreRespaldo('json'), JSON.stringify(db))) respaldoHecho(); }
+// Todos los datos de la óptica en un Excel legible (una hoja por tema), para que el dueño tenga su información cuando quiera.
+async function descargarExcelTodo() {
+  const H = v => ({ v, s: 5 }), M = v => ({ v: round2(num(v)), s: 2 }), f = s => s ? String(s).slice(0, 10).split('-').reverse().join('/') : '';
+  const hoja = (nombre, cab, filas, anchos) => ({ nombre, anchos, fija: 1, rows: [cab.map(H), ...filas] });
+  const vivo2 = x => x.anulado ? 'Anulado' : '';
+  const ojo = e => e ? [e.esf, e.cil, e.eje, e.add, e.av].map(v => v ?? '') : ['', '', '', '', ''];
+  const por = id => id ? socioName(id) : '';
+  const libro = [
+    hoja('Pacientes', ['Nombre', 'DNI', 'Celular', 'Nacimiento', 'Ocupación', 'Dirección', 'Notas', 'Registrado'],
+      db.pacientes.map(p => [p.nombre || '', p.dni || '', p.telefono || '', f(p.nacimiento), p.ocupacion || '', p.direccion || '', p.notas || '', f(p.creadoF || (p.creado ? ymd(new Date(p.creado)) : ''))]),
+      [30, 11, 12, 11, 16, 28, 30, 11]),
+    hoja('Medidas', ['Fecha', 'Paciente', 'DNI', 'OD esfera', 'OD cilindro', 'OD eje', 'OD adición', 'OD AV', 'OI esfera', 'OI cilindro', 'OI eje', 'OI adición', 'OI AV', 'DIP', 'Altura', 'Lente', 'Diagnóstico', 'Notas'],
+      [...db.medidas].sort((a, b) => String(a.fecha).localeCompare(String(b.fecha))).map(m => { const p = paciente(m.pacienteId); return [f(m.fecha), p?.nombre || '', p?.dni || '', ...ojo(m.od), ...ojo(m.oi), m.dip || '', m.altura || '', m.lente || '', diagnostico(m).map(d => d[0]).join(', '), m.notas || '']; }),
+      [11, 28, 11, 9, 9, 7, 9, 8, 9, 9, 7, 9, 8, 7, 7, 20, 28, 30]),
+    hoja('Ventas', ['N°', 'Fecha', 'Cliente', 'DNI', 'Celular', 'Productos', 'Descuento', 'Total', 'Pagado', 'Saldo', 'Estado', 'Entrega', 'Vendió', 'Notas'],
+      [...db.ordenes].sort((a, b) => a.numero - b.numero).map(o => { const p = paciente(o.pacienteId); return [pad(o.numero), f(o.fecha), nombreDe(o), p?.dni || '', p?.telefono || '', o.items.map(i => `${num(i.cant) !== 1 ? num(i.cant) + ' × ' : ''}${i.desc}`).join(' + '), M(o.descuento), M(totalOrden(o)), M(pagadoOrden(o)), M(Math.max(0, saldoOrden(o))), (ESTADOS[o.estado] || [o.estado])[0], f(o.entrega), por(o.por), o.notas || '']; }),
+      [7, 11, 28, 11, 12, 60, 10, 11, 11, 11, 14, 11, 14, 30]),
+    hoja('Pagos', ['Fecha', 'N° venta', 'Cliente', 'Monto', 'Método', 'Tipo', 'Cobró'],
+      [...db.pagos].sort((a, b) => String(a.fecha).localeCompare(String(b.fecha))).map(x => { const o = orden(x.ordenId); return [f(x.fecha), o ? pad(o.numero) : '', o ? nombreDe(o) : '', M(x.monto), x.metodo || '', x.tipo === 'saldo' ? 'Pago de saldo' : 'Adelanto', por(x.por)]; }),
+      [11, 9, 28, 11, 13, 14, 14]),
+    hoja('Comprobantes', ['Fecha', 'Tipo', 'Número', 'Cliente', 'Documento', 'Total', 'Estado'],
+      [...db.comprobantes].sort((a, b) => String(a.fecha).localeCompare(String(b.fecha))).map(c => [f(c.fecha), TIPOS_CP[c.tipo] || c.tipo, cpNum(c), c.cliente?.nombre || '', c.cliente?.doc || '', M(c.total), c.estado === 'anulado' ? 'Anulado' : 'Emitido']),
+      [11, 16, 16, 30, 13, 11, 10]),
+    hoja('Monturas', ['Código', 'Sigla', 'Clase', 'Marca', 'Modelo', 'Varilla', 'Colores', 'Género', 'Material', 'Forma', 'Aro', 'Precio', 'Costo', 'Stock'],
+      db.monturas.map(m => [m.codigo || '', siglaMontura(m), m.clase === 'sol' ? 'Lentes de sol' : 'Montura', m.marca || '', m.modelo || '', varillaDe(m), coloresDe(m), m.genero || '', m.material || '', m.forma || '', m.aro || '', M(m.precio), m.costo === '' || m.costo == null ? '' : M(m.costo), num(m.stock)]),
+      [10, 26, 13, 14, 12, 14, 18, 11, 11, 12, 12, 10, 10, 7]),
+    hoja('Accesorios', ['Grupo', 'Nombre', 'Precio', 'Costo', 'Stock'],
+      db.productos.map(p => [p.grupo || '', p.nombre || '', M(p.precio), p.costo === '' || p.costo == null ? '' : M(p.costo), p.stock === '' || p.stock == null ? 'Sin stock' : num(p.stock)]),
+      [18, 34, 10, 10, 9]),
+    hoja('Precios de lunas', ['Grupo', 'Lista', 'Rango', 'Esfera hasta', 'Cilindro hasta', 'Tratamiento', 'Precio'],
+      db.tarifas.flatMap(t => (t.filas || []).flatMap(r => (t.cols || []).map((c, i) => [t.grupo || '', t.nombre || '', r.rango || '', r.esf ?? '', r.cil ?? '', c, M((r.precios || [])[i])]))),
+      [16, 26, 14, 12, 13, 18, 10]),
+    hoja('Ingresos y egresos', ['Fecha', 'Tipo', 'Categoría', 'Detalle', 'Persona', 'Método', 'Monto', 'Anotó', 'Estado'],
+      [...movimientos()].reverse().map(m => [f(m.fecha), m.tipo === 'ingreso' ? 'Ingreso' : 'Egreso', m.cat, m.det || '', m.persona ? socioName(m.persona) : '', m.metodo, M(m.monto), por(m.por), vivo2(m.x)]),
+      [11, 9, 26, 34, 14, 13, 11, 14, 9]),
+    hoja('Ventas anuladas', ['N°', 'Fecha', 'Cliente', 'Productos', 'Total', 'Pagos que tenía', 'Anulada el', 'Anuló'],
+      db.anuladas.map(a => [pad(a.numero), f(a.fecha), a.pacienteNombre || '', (a.items || []).map(i => i.desc).join(' + '), M(a.total), M((a.pagos || []).reduce((s, x) => s + num(x.monto), 0)), a.anuladaTs ? f(ymd(new Date(a.anuladaTs))) : '', por(a.anuladaPor)]),
+      [7, 11, 28, 50, 11, 14, 11, 14]),
+  ];
+  const n = db.config.nombre || 'optica', archivo = `Datos ${n.replace(/[\\/:*?"<>|]+/g, ' ')} ${hoy()}.xlsx`;
+  if (await saveFile(archivo, xlsxLibro(libro))) respaldoHecho();
+}
 const socio = id => db.config.socios.find(s => s.id === id);
 const socioName = id => socio(id)?.nombre || '—';
 const me = () => { const s = socio(user); return s && !s.baja ? s : null; };
@@ -3356,27 +3398,32 @@ function contadorCSV(m) {
   saveFile(`Reporte contador ${m}.xlsx`, xlsx(rows, [12, 16, 13, 8, 12, 17, 16, 34, 15, 12, 12, 11], 'Registro de ventas'));
 }
 
-// Excel (.xlsx) de una hoja, sin librerías. Celda: texto, número, o { v, s } con s = 1 negrita,
+// Excel (.xlsx) sin librerías. Celda: texto, número, o { v, s } con s = 1 negrita,
 // 2 monto, 3 monto en negrita, 4 título, 5 encabezado de tabla.
-function xlsx(rows, anchos, hoja) {
+const xlsx = (rows, anchos, hoja) => xlsxLibro([{ nombre: hoja, rows, anchos }]);
+function xlsxLibro(hojas) {
   const x = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '');
   const col = i => (i >= 26 ? String.fromCharCode(64 + Math.floor(i / 26)) : '') + String.fromCharCode(65 + i % 26);
-  const filas = rows.map((r, ri) => `<row r="${ri + 1}">${r.map((c, ci) => {
+  const hojaXml = ({ rows, anchos, fija }) => { const filas = rows.map((r, ri) => `<row r="${ri + 1}">${r.map((c, ci) => {
     const o = c && typeof c === 'object' ? c : { v: c }, ref = col(ci) + (ri + 1), st = o.s ? ` s="${o.s}"` : '';
     if (o.v === '' || o.v == null) return o.s ? `<c r="${ref}"${st}/>` : '';
     return typeof o.v === 'number' ? `<c r="${ref}"${st}><v>${o.v}</v></c>` : `<c r="${ref}" t="inlineStr"${st}><is><t xml:space="preserve">${x(o.v)}</t></is></c>`;
   }).join('')}</row>`).join('');
+    return `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0">${fija ? `<pane ySplit="${fija}" topLeftCell="A${fija + 1}" activePane="bottomLeft" state="frozen"/>` : ''}</sheetView></sheetViews>${anchos && anchos.length ? `<cols>${anchos.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>` : ''}<sheetData>${filas}</sheetData></worksheet>`;
+  };
+  const usados = new Set(), nombreHoja = n => { let b = String(n || 'Hoja').replace(/[:*?\/\\[\]]/g, ' ').slice(0, 28).trim() || 'Hoja', t = b, k = 2; while (usados.has(t.toLowerCase())) t = b + ' ' + k++; usados.add(t.toLowerCase()); return t; };
+  const nombres = hojas.map(h => nombreHoja(h.nombre));
   const X = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
   const files = {
-    '[Content_Types].xml': X + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>',
+    '[Content_Types].xml': X + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${hojas.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
     '_rels/.rels': X + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
-    'xl/workbook.xml': X + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${x(hoja.slice(0, 31))}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
-    'xl/_rels/workbook.xml.rels': X + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+    'xl/workbook.xml': X + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${nombres.map((n, i) => `<sheet name="${x(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`,
+    'xl/_rels/workbook.xml.rels': X + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${hojas.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${hojas.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
     'xl/styles.xml': X + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00"/></numFmts>'
       + '<fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="14"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts>'
       + '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF2563EB"/></patternFill></fill></fills>'
       + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="6"><xf xfId="0"/><xf xfId="0" fontId="1" applyFont="1"/><xf xfId="0" numFmtId="164" applyNumberFormat="1"/><xf xfId="0" numFmtId="164" fontId="1" applyNumberFormat="1" applyFont="1"/><xf xfId="0" fontId="2" applyFont="1"/><xf xfId="0" fontId="3" fillId="2" applyFont="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>',
-    'xl/worksheets/sheet1.xml': X + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${anchos.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols><sheetData>${filas}</sheetData></worksheet>`,
+    ...Object.fromEntries(hojas.map((h, i) => [`xl/worksheets/sheet${i + 1}.xml`, X + hojaXml(h)])),
   };
   return new Blob([zipStore(files)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
@@ -3767,8 +3814,10 @@ routes.ajustes = {
           <div class="actions"><a class="btn" href="${waSoporte('Hola, tengo una consulta sobre TerraÓptica (' + (c.nombre || '') + ').')}" target="_blank" rel="noopener">${icon('wa')} Escribir a soporte</a>
           <button class="btn" id="csalir3">${icon('logout')} Cerrar sesión en este equipo</button></div></div></div>
         ${!soyDueno() ? '' : `<div class="card"><div class="card-h"><h3>Respaldo de datos</h3></div><div class="card-b">
-          <p class="muted small" style="margin-top:0">Tus datos se guardan en la nube de TerraÓptica y quedan copiados en cada equipo. Igual puedes descargar una copia cuando quieras.</p>
-          <div class="actions"><button class="btn primary" id="exp">${icon('down')} Descargar respaldo</button><label class="btn">${icon('up')} Restaurar respaldo<input type="file" id="imp" accept=".json,.txt,application/json,text/plain" hidden></label></div>
+          <p class="muted small" style="margin-top:0">Tus datos son tuyos. Se guardan en la nube de TerraÓptica y quedan copiados en cada equipo. Cuando quieras puedes bajarlos completos.</p>
+          <div class="actions" style="margin-bottom:10px"><button class="btn primary" id="expxl">${icon('down')} Descargar todos mis datos en Excel</button></div>
+          <p class="hint" style="margin:0 0 12px">Pacientes, medidas, ventas, pagos, boletas, inventario, precios de lunas, ingresos y egresos: una hoja para cada uno, para abrir en Excel.</p>
+          <div class="actions"><button class="btn" id="exp">${icon('down')} Descargar respaldo</button><label class="btn">${icon('up')} Restaurar respaldo<input type="file" id="imp" accept=".json,.txt,application/json,text/plain" hidden></label></div>
           ${c.ultimoRespaldo ? `<p class="hint">Último respaldo: ${new Date(c.ultimoRespaldo).toLocaleString('es-PE')}</p>` : ''}
           <div style="border-top:1px solid var(--line-2);margin-top:16px;padding-top:14px"><b class="small">¿Terminaste de probar?</b><p class="muted small" style="margin:4px 0 10px">Borra los datos de ejemplo y empieza con tus pacientes reales. Pide la clave de ambos socios.</p>
           <button class="btn danger" id="reset">${icon('trash')} Empezar de cero</button></div></div></div>
@@ -3834,6 +3883,7 @@ routes.ajustes = {
       try { saveFile(`Prueba ${TIPOS_CP[c.tipo]}.pdf`, await comprobantePDF(c)); } catch (err) { toast('No se pudo generar el PDF: ' + err.message); }
     };
     $('#exp') && ($('#exp').onclick = descargarRespaldo);
+    $('#expxl') && ($('#expxl').onclick = async () => { try { await descargarExcelTodo(); } catch (err) { toast('No se pudo armar el Excel: ' + err.message); } });
     $('#subcel') && ($('#subcel').onclick = () => ofrecerSubida(true));
     $('#csalir3').onclick = salirDeCuenta;
     $('#reset') && ($('#reset').onclick = () => dual('Borrar pacientes, órdenes, caja e inventario (se conservan los socios, los datos de la óptica y las listas de precios)', () => {
@@ -4003,7 +4053,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.26.4';
+const APP_VERSION = '2026.09.26.5';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
