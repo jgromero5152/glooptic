@@ -2565,7 +2565,7 @@ const vivo = x => !x.anulado;
 const CAT_VALE = 'Ganancia del dueño y socios'; // se descuenta de la parte de esa persona en la caja (antes "vale")
 const CAT_EGRESO = [['Sueldos', 'users'], ['Gastos', 'cash'], ['Compras de mercadería', 'box'], ['Laboratorio', 'eye'], [CAT_VALE, 'wallet'], ['Otros egresos', 'apps']];
 const CAT_DEUDA = 'Pago de deuda', CAT_ANTIGUA = 'Deuda antigua';
-const CAT_INGRESO = [[CAT_DEUDA, 'wallet'], [CAT_ANTIGUA, 'clock'], ['Otros ingresos', 'trend'], ['Aporte del dueño o socios', 'users'], ['Préstamo', 'cash']];
+const CAT_INGRESO = [[CAT_ANTIGUA, 'clock'], [CAT_DEUDA, 'wallet'], ['Otros ingresos', 'trend'], ['Aporte del dueño o socios', 'users'], ['Préstamo', 'cash']];
 const SIN_GANANCIA = ['Aporte del dueño o socios', 'Préstamo']; // entran a la caja pero no son ganancia
 const ganaIngreso = x => !SIN_GANANCIA.includes(x.categoria);
 // Las tres colecciones (ingresos, gastos y vales) vistas como una sola lista.
@@ -2598,7 +2598,7 @@ function movimientoForm(tipo, cat) {
       <label class="f" id="mper" style="display:none">¿Para quién?<select class="inp" name="socioId">${autorizantes().map(s => `<option value="${s.id}" ${s.id === user ? 'selected' : ''}>${esc(s.nombre)}</option>`).join('')}</select><span class="hint">Se descuenta de la ganancia de esa persona en la caja.</span></label>
       <label class="f">Monto<input class="inp" name="monto" inputmode="decimal" required placeholder="0.00"></label>
       <div class="pay-opts">${METODOS.map((m, i) => `<label><input type="radio" name="metodo" value="${m}" ${i === 0 ? 'checked' : ''}><span>${m}</span></label>`).join('')}</div>
-      <label class="f">${ing ? 'Observación' : 'Detalle'} <span class="hint">(opcional)</span><textarea class="inp" name="obs" rows="2" placeholder="${ing ? 'Ej. Jorge puso sencillo para la caja' : 'Ej. Sueldo de Ana, recibo de luz de setiembre…'}"></textarea></label>
+      <label class="f">${ing ? 'Observación' : 'Detalle'} <span class="hint" id="mobs">(opcional)</span><textarea class="inp" name="obs" rows="2" placeholder="${ing ? 'Ej. Jorge puso sencillo para la caja' : 'Ej. Sueldo de Ana, recibo de luz de setiembre…'}"></textarea></label>
       <p class="hint" id="mhint" style="margin:0"></p></form>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn ${ing ? 'mv-ing' : 'primary mv-egr'}" form="mf">${icon('check')} Guardar ${ing ? 'ingreso' : 'egreso'}</button>`,
     onMount: bg => {
@@ -2614,12 +2614,14 @@ function movimientoForm(tipo, cat) {
         $$('#mcats button', bg).forEach(b => b.classList.toggle('on', b.dataset.c === cat));
         const dd = cat === CAT_DEUDA;
         if ($('#mdeuda', bg)) { $('#mdeuda', bg).style.display = dd ? '' : 'none'; resto.forEach(el => el.style.display = dd ? 'none' : ''); if (dd) lista(); }
-        $('#mcli', bg).style.display = cat === CAT_ANTIGUA ? '' : 'none'; $('[name=cliente]', bg).required = cat === CAT_ANTIGUA;
+        $('#mcli', bg).style.display = 'none';
+        $('[name=obs]', bg).placeholder = cat === CAT_ANTIGUA ? 'Ej. Abono de S/ 100 de Carmen Ruiz' : ing ? 'Ej. Jorge puso sencillo para la caja' : 'Ej. Sueldo de Ana, recibo de luz de setiembre…';
+        $('#mobs', bg).textContent = cat === CAT_ANTIGUA ? '(de quién es el abono)' : '(opcional)';
         $('#mnueva', bg).style.display = cat === '' ? '' : 'none'; $('#mper', bg).style.display = cat === CAT_VALE ? '' : 'none';
-        $('#mhint', bg).textContent = ing ? (SIN_GANANCIA.includes(cat) ? 'Entra a la caja, pero no se cuenta como ganancia.' : cat === CAT_ANTIGUA ? 'Para deudas anotadas antes de usar el sistema (cuaderno). Entra a la caja y suma a la ganancia del día.' : 'Entra a la caja y suma a la ganancia del día.') : cat === CAT_VALE ? '' : 'Sale de la caja y se resta de la ganancia del día.';
+        $('#mhint', bg).textContent = ing ? (SIN_GANANCIA.includes(cat) ? 'Entra a la caja, pero no se cuenta como ganancia.' : cat === CAT_ANTIGUA ? 'Para clientes que deben de antes del sistema: no crea ninguna venta, solo entra a la caja. Si la deuda está en el sistema, usa "Pago de deuda".' : 'Entra a la caja y suma a la ganancia del día.') : cat === CAT_VALE ? '' : 'Sale de la caja y se resta de la ganancia del día.';
       };
-      $$('#mcats button', bg).forEach(b => b.onclick = () => { cat = b.dataset.c; pintar(); if (cat === '') $('[name=nueva]', bg).focus(); if (cat === CAT_ANTIGUA) $('[name=cliente]', bg).focus(); });
-      if ($('#mdq', bg)) { $('#mdq', bg).oninput = lista; $('#mant', bg).onclick = () => { cat = CAT_ANTIGUA; pintar(); $('[name=cliente]', bg).focus(); }; }
+      $$('#mcats button', bg).forEach(b => b.onclick = () => { cat = b.dataset.c; pintar(); if (cat === '') $('[name=nueva]', bg).focus(); if (cat === CAT_ANTIGUA) $('[name=monto]', bg).focus(); });
+      if ($('#mdq', bg)) { $('#mdq', bg).oninput = lista; $('#mant', bg).onclick = () => { cat = CAT_ANTIGUA; pintar(); $('[name=monto]', bg).focus(); }; }
       pintar();
       $('#mf', bg).onsubmit = e => {
         e.preventDefault();
@@ -2628,7 +2630,7 @@ function movimientoForm(tipo, cat) {
         if (monto <= 0) return toast('Escribe el monto');
         if (!categoria) return toast('Escribe el nombre de la categoría');
         if (categoria === CAT_DEUDA) return;
-        if (categoria === CAT_ANTIGUA && !String(f.cliente || '').trim()) return toast('Escribe quién paga');
+        if (categoria === CAT_ANTIGUA && !obs) return toast('En la observación escribe de quién es el abono');
         const base = { id: uid(), fecha: d, monto, metodo: f.metodo, por: user, ts: Date.now() };
         const guardar = () => {
           if (ing) db.ingresos.push({ ...base, categoria, obs, ...(categoria === CAT_ANTIGUA ? { cliente: String(f.cliente || '').trim() } : {}) });
@@ -3905,7 +3907,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.26.2';
+const APP_VERSION = '2026.09.26.3';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
