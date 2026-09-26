@@ -847,12 +847,58 @@ tbody tr.link:hover td{background:var(--surface-2)}
 }
 @keyframes sheet{from{transform:translateY(40px);opacity:0}}
 @media (prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important}}
+/* ---------- Venta rápida ---------- */
+.side-rap{display:flex;align-items:center;gap:10px;min-height:44px;padding:4px 14px;margin:-2px 0 12px;border-radius:14px;color:#7a3e05;font-weight:650;background:linear-gradient(145deg,#ffd166,#f59e0b);box-shadow:0 12px 22px -14px rgba(217,119,6,.95),inset 0 1px 0 rgba(255,255,255,.45)}
+.side-rap svg{width:19px;height:19px;flex:none}
+.side-rap span{white-space:nowrap}
+.side-rap:hover{filter:brightness(1.05)}
+.btn.top-rap,.btn.rap,.btn.hero-r{background:linear-gradient(145deg,#ffd166,#f59e0b);border-color:#f59e0b;color:#5c2d03;font-weight:650;box-shadow:0 10px 20px -12px rgba(217,119,6,.9)}
+.btn.top-rap:hover,.btn.rap:hover,.btn.hero-r:hover{filter:brightness(1.05);background:linear-gradient(145deg,#ffd166,#f59e0b);border-color:#f59e0b}
+.btn.top-rap{flex:none;gap:7px}
+.btn.top-rap svg,.btn.rap svg,.btn.hero-r svg{width:17px;height:17px}
+.vhead h1 svg{width:22px;height:22px;color:#d97706;vertical-align:-3px}
+.vrap{display:flex;align-items:center;gap:12px;padding:12px 14px;margin:0 0 14px;border-radius:14px;border:1.5px solid #f7c566;background:#fff8e6;color:#5c2d03}
+.vrap:hover{background:#fff1cc}
+.vrap > svg:first-child{width:22px;height:22px;color:#d97706;flex:none}
+.vrap > svg:last-child{width:18px;height:18px;transform:scaleX(-1);color:#b45309;flex:none}
+.vrap b{display:block;font-size:15px}
+.vrap small{display:block;font-size:12.5px;color:#8a5a1c}
+.ini svg{width:17px;height:17px;color:#d97706}
+@media (max-width:900px){
+  .btn.top-rap{margin-left:auto;min-height:38px;padding:0 12px;border-radius:11px;font-size:13.5px}
+  .top .top-rap ~ .bsearch{margin-left:0}
+  .top.buscando .top-rap{display:none}
+}
+.btn.top-rap em{display:none;font-style:normal}
+@media (max-width:640px){ .btn.top-rap span{display:none} .btn.top-rap em{display:inline} .btn.top-rap{padding:0 11px} }
+/* ---------- Ingresos y egresos ---------- */
+.mv-t{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;margin-right:8px;font-weight:800;font-size:14px;line-height:1;vertical-align:-3px}
+.mv-t.ingreso{background:var(--ok-soft);color:var(--ok)}
+.mv-t.egreso{background:var(--danger-soft);color:var(--danger)}
+.mv-tbl td{vertical-align:top}
+.mv-det{color:var(--ink-2);margin-top:2px}
+.mv-anul td{opacity:.55}
+.mv-anul td b:not([style]),.mv-anul td.num{text-decoration:line-through}
+.mv-fil{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.mv-fil select{width:auto;max-width:100%}
+.mv-va{gap:6px;margin-left:auto;cursor:pointer}
+.mv-cat{padding:9px 0;border-top:1px solid var(--line-2);color:inherit}
+.mv-cat:first-child{border-top:0;padding-top:0}
+.mv-cat:hover{color:var(--accent)}
+.mv-cats button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-2)}
+.mv-hoy{margin-bottom:0}
+.btn.mv-egr{background:#be123c;border-color:#be123c;box-shadow:0 10px 20px -10px rgba(190,18,60,.7)}
+.btn.mv-egr:hover{background:#9f1239;border-color:#9f1239}
+.nowrap{white-space:nowrap}
+.btn.mv-ing{background:#059669;border-color:#059669;color:#fff;box-shadow:0 10px 20px -10px rgba(5,150,105,.7)}
+.btn.mv-ing:hover{background:#047857;border-color:#047857}
+@media (max-width:640px){ .mv-va{margin-left:0} .mv-fil select{flex:1} }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <div id="print"></div>
-<script type="module" src="nube.js?v=2026.09.25.3"></script>
-<script src="app.js?v=2026.09.25.3"></script>
+<script type="module" src="nube.js?v=2026.09.26.1"></script>
+<script src="app.js?v=2026.09.26.1"></script>
 </body>
 </html>
