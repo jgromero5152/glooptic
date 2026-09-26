@@ -1931,7 +1931,7 @@ function cobrarForm(o, luego) {
   const s = saldoOrden(o);
   const fechaCerrada = cerrado(hoy());
   modal({
-    title: `Cobrar · Orden N° ${pad(o.numero)}`,
+    title: `Cobrar · ${esc(nombreDe(o))} · N° ${pad(o.numero)}`,
     body: `<form id="cf" class="form">${fechaCerrada ? `<div class="lock-note">${icon('lock')}<div>La caja de hoy ya está cerrada; se pedirá la clave de ambos socios.</div></div>` : ''}
       <div class="row between"><span class="muted">Saldo pendiente</span><b class="num" style="font-size:20px">${money(s)}</b></div>
       <label class="f">Monto<input class="inp" name="monto" inputmode="decimal" value="${s.toFixed(2)}" required></label>
@@ -2564,18 +2564,22 @@ const noAnulable = () => toast(`Solo se puede anular lo de los últimos ${DIAS_A
 const vivo = x => !x.anulado;
 const CAT_VALE = 'Ganancia del dueño y socios'; // se descuenta de la parte de esa persona en la caja (antes "vale")
 const CAT_EGRESO = [['Sueldos', 'users'], ['Gastos', 'cash'], ['Compras de mercadería', 'box'], ['Laboratorio', 'eye'], [CAT_VALE, 'wallet'], ['Otros egresos', 'apps']];
-const CAT_INGRESO = [['Otros ingresos', 'trend'], ['Aporte del dueño o socios', 'users'], ['Préstamo', 'wallet']];
+const CAT_DEUDA = 'Pago de deuda', CAT_ANTIGUA = 'Deuda antigua';
+const CAT_INGRESO = [[CAT_DEUDA, 'wallet'], [CAT_ANTIGUA, 'clock'], ['Otros ingresos', 'trend'], ['Aporte del dueño o socios', 'users'], ['Préstamo', 'cash']];
 const SIN_GANANCIA = ['Aporte del dueño o socios', 'Préstamo']; // entran a la caja pero no son ganancia
 const ganaIngreso = x => !SIN_GANANCIA.includes(x.categoria);
 // Las tres colecciones (ingresos, gastos y vales) vistas como una sola lista.
 function movimientos() {
   return [
-    ...db.ingresos.map(x => ({ x, col: 'ingresos', tipo: 'ingreso', cat: x.categoria || 'Otros ingresos', det: x.obs || '', metodo: x.metodo || 'Efectivo' })),
+    ...db.ingresos.map(x => ({ x, col: 'ingresos', tipo: 'ingreso', cat: x.categoria || 'Otros ingresos', det: [x.cliente, x.obs].filter(Boolean).join(' · '), metodo: x.metodo || 'Efectivo' })),
     ...db.gastos.map(x => ({ x, col: 'gastos', tipo: 'egreso', cat: x.categoria || 'Gastos', det: x.categoria ? x.obs || '' : x.concepto || '', metodo: x.metodo || 'Efectivo' })),
     ...db.vales.map(x => ({ x, col: 'vales', tipo: 'egreso', cat: CAT_VALE, persona: x.socioId, det: x.concepto || '', metodo: x.metodo || 'Efectivo' })),
   ].map(m => ({ ...m, fecha: m.x.fecha, monto: num(m.x.monto), ts: m.x.ts || 0, por: m.x.por })).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.ts - a.ts);
 }
 const puedeMov = m => m.col === 'vales' ? puede('vales') : puede('gastos');
+const pagosDeuda = () => db.pagos.filter(p => p.tipo === 'saldo').map(p => { const o = orden(p.ordenId); return { x: p, col: 'pagos', tipo: 'ingreso', cat: CAT_DEUDA, det: o ? `${nombreDe(o)} · Pedido N° ${pad(o.numero)}` : '', href: o ? '#/orden/' + o.id : '', metodo: p.metodo || 'Efectivo', fecha: p.fecha, monto: num(p.monto), ts: p.ts || 0, por: p.por }; });
+// Pedidos que deben, para cobrar desde "Ingreso → Pago de deuda".
+const deudores = () => db.ordenes.filter(o => saldoOrden(o) > 0.009).sort((a, b) => nombreDe(a).localeCompare(nombreDe(b)));
 function movimientoForm(tipo, cat) {
   const d = hoy(), ing = tipo === 'ingreso';
   const lista = (ing ? CAT_INGRESO : CAT_EGRESO).filter(([c]) => c === CAT_VALE ? puede('vales') : puede('gastos'));
@@ -2587,6 +2591,9 @@ function movimientoForm(tipo, cat) {
     title: ing ? 'Registrar ingreso' : 'Registrar egreso',
     body: `<form id="mf" class="form"><div class="lock-note mv-hoy">${icon('clock')}<div>Se anota con fecha de <b>hoy, ${fdate(d)}</b>.</div></div>
       <div class="fld">Categoría<div class="pick mv-cats" id="mcats">${lista.map(([c, i]) => `<button type="button" data-c="${esc(c)}">${icon(i)} ${esc(c)}</button>`).join('')}${propias.map(c => `<button type="button" data-c="${esc(c)}">${esc(c)}</button>`).join('')}${puede('gastos') ? `<button type="button" data-c="" id="motra">${icon('plus')} Otra…</button>` : ''}</div></div>
+      ${ing ? `<div id="mdeuda" style="display:none"><div class="search" style="max-width:none">${icon('search')}<input id="mdq" placeholder="Nombre, celular o N° de pedido…" autocomplete="off"></div>
+        <div class="mdl" id="mdl"></div><button type="button" class="btn sm ghost" id="mant">${icon('clock')} No está en el sistema (deuda de antes)</button></div>` : ''}
+      <label class="f" id="mcli" style="display:none">¿Quién paga?<input class="inp" name="cliente" autocomplete="off" placeholder="Nombre del cliente"></label>
       <label class="f" id="mnueva" style="display:none">Nombre de la categoría<input class="inp" name="nueva" maxlength="40" placeholder="${ing ? 'Ej. Alquiler de consultorio' : 'Ej. Publicidad, movilidad…'}"></label>
       <label class="f" id="mper" style="display:none">¿Para quién?<select class="inp" name="socioId">${autorizantes().map(s => `<option value="${s.id}" ${s.id === user ? 'selected' : ''}>${esc(s.nombre)}</option>`).join('')}</select><span class="hint">Se descuenta de la ganancia de esa persona en la caja.</span></label>
       <label class="f">Monto<input class="inp" name="monto" inputmode="decimal" required placeholder="0.00"></label>
@@ -2595,12 +2602,24 @@ function movimientoForm(tipo, cat) {
       <p class="hint" id="mhint" style="margin:0"></p></form>`,
     foot: `<button class="btn" data-close>Cancelar</button><button class="btn ${ing ? 'mv-ing' : 'primary mv-egr'}" form="mf">${icon('check')} Guardar ${ing ? 'ingreso' : 'egreso'}</button>`,
     onMount: bg => {
+      const resto = $$('#mf > :not(.mv-hoy):not(.fld):not(#mdeuda)', bg).concat($$('.modal-f [form=mf]', bg.closest('.modal-bg') || bg));
+      const lista = () => {
+        const q = sinTilde($('#mdq', bg).value.trim()), dg = q.replace(/\D/g, '');
+        const ds = deudores().filter(o => { const p = paciente(o.pacienteId); return !q || sinTilde(nombreDe(o)).includes(q) || (dg && (String(p?.telefono || '').replace(/\D/g, '').includes(dg) || String(o.numero) === String(+dg))); });
+        $('#mdl', bg).innerHTML = ds.length ? ds.slice(0, 40).map(o => `<button type="button" class="mdi" data-o="${o.id}"><span class="ini">${initials(nombreDe(o))}</span><span class="grow"><b>${esc(nombreDe(o))}</b><small>Pedido N° ${pad(o.numero)} · ${fdate(o.fecha)}</small></span><span class="chip deuda num">Debe ${money(saldoOrden(o))}</span></button>`).join('')
+          : `<div class="empty small" style="padding:14px">${deudores().length ? 'Nadie con ese nombre debe.' : 'Nadie debe en el sistema.'} Si la deuda es de antes del sistema, toca el botón de abajo.</div>`;
+        $$('[data-o]', bg).forEach(b => b.onclick = () => { closeModal(); cobrarForm(orden(b.dataset.o)); });
+      };
       const pintar = () => {
         $$('#mcats button', bg).forEach(b => b.classList.toggle('on', b.dataset.c === cat));
+        const dd = cat === CAT_DEUDA;
+        if ($('#mdeuda', bg)) { $('#mdeuda', bg).style.display = dd ? '' : 'none'; resto.forEach(el => el.style.display = dd ? 'none' : ''); if (dd) lista(); }
+        $('#mcli', bg).style.display = cat === CAT_ANTIGUA ? '' : 'none'; $('[name=cliente]', bg).required = cat === CAT_ANTIGUA;
         $('#mnueva', bg).style.display = cat === '' ? '' : 'none'; $('#mper', bg).style.display = cat === CAT_VALE ? '' : 'none';
-        $('#mhint', bg).textContent = ing ? (SIN_GANANCIA.includes(cat) ? 'Entra a la caja, pero no se cuenta como ganancia.' : 'Entra a la caja y suma a la ganancia del día.') : cat === CAT_VALE ? '' : 'Sale de la caja y se resta de la ganancia del día.';
+        $('#mhint', bg).textContent = ing ? (SIN_GANANCIA.includes(cat) ? 'Entra a la caja, pero no se cuenta como ganancia.' : cat === CAT_ANTIGUA ? 'Para deudas anotadas antes de usar el sistema (cuaderno). Entra a la caja y suma a la ganancia del día.' : 'Entra a la caja y suma a la ganancia del día.') : cat === CAT_VALE ? '' : 'Sale de la caja y se resta de la ganancia del día.';
       };
-      $$('#mcats button', bg).forEach(b => b.onclick = () => { cat = b.dataset.c; pintar(); if (cat === '') $('[name=nueva]', bg).focus(); });
+      $$('#mcats button', bg).forEach(b => b.onclick = () => { cat = b.dataset.c; pintar(); if (cat === '') $('[name=nueva]', bg).focus(); if (cat === CAT_ANTIGUA) $('[name=cliente]', bg).focus(); });
+      if ($('#mdq', bg)) { $('#mdq', bg).oninput = lista; $('#mant', bg).onclick = () => { cat = CAT_ANTIGUA; pintar(); $('[name=cliente]', bg).focus(); }; }
       pintar();
       $('#mf', bg).onsubmit = e => {
         e.preventDefault();
@@ -2608,9 +2627,11 @@ function movimientoForm(tipo, cat) {
         const nueva = String(f.nueva || '').trim().replace(/\s+/g, ' '), categoria = cat === '' ? nueva.charAt(0).toUpperCase() + nueva.slice(1) : cat;
         if (monto <= 0) return toast('Escribe el monto');
         if (!categoria) return toast('Escribe el nombre de la categoría');
+        if (categoria === CAT_DEUDA) return;
+        if (categoria === CAT_ANTIGUA && !String(f.cliente || '').trim()) return toast('Escribe quién paga');
         const base = { id: uid(), fecha: d, monto, metodo: f.metodo, por: user, ts: Date.now() };
         const guardar = () => {
-          if (ing) db.ingresos.push({ ...base, categoria, obs });
+          if (ing) db.ingresos.push({ ...base, categoria, obs, ...(categoria === CAT_ANTIGUA ? { cliente: String(f.cliente || '').trim() } : {}) });
           else if (categoria === CAT_VALE) db.vales.push({ ...base, socioId: f.socioId, concepto: obs });
           else db.gastos.push({ ...base, categoria, concepto: obs || categoria, obs });
           save(); closeModal(); toast(`${ing ? 'Ingreso' : 'Egreso'} de ${money(monto)} registrado`); render();
@@ -2630,7 +2651,7 @@ const movFila = (m, conFecha) => `<tr class="${m.x.anulado ? 'mv-anul' : ''}">${
   <td><span class="mv-t ${m.tipo}">${m.tipo === 'ingreso' ? '+' : '−'}</span><b>${esc(m.cat)}</b>${m.persona ? ` · ${esc(socioName(m.persona))}` : ''}${m.det && m.det !== m.cat ? `<div class="small mv-det">${esc(m.det)}</div>` : ''}
     <div class="muted small">${esc(m.metodo)} · anotó ${esc(socioName(m.por))}${m.x.anulado ? ` · <b style="color:var(--danger)">Anulado</b> por ${esc(socioName(m.x.anulado.por))} el ${fdate(ymd(new Date(m.x.anulado.ts)), { day: 'numeric', month: 'short' })}` : ''}</div></td>
   <td class="r num strong nowrap" style="color:${m.x.anulado ? 'var(--muted)' : m.tipo === 'ingreso' ? 'var(--ok)' : 'var(--danger)'}">${m.tipo === 'ingreso' ? '+' : '−'} ${money(m.monto)}</td>
-  <td style="width:40px">${!m.x.anulado && puedeMov(m) && anulable(m.fecha) ? `<button class="btn ghost icon sm" data-manul="${m.col}:${m.x.id}" title="Anular">${icon('trash')}</button>` : ''}</td></tr>`;
+  <td style="width:40px">${m.col === 'pagos' ? `<a class="btn ghost icon sm" href="${m.href}" title="Ver pedido">${icon('eye')}</a>` : !m.x.anulado && puedeMov(m) && anulable(m.fecha) ? `<button class="btn ghost icon sm" data-manul="${m.col}:${m.x.id}" title="Anular">${icon('trash')}</button>` : ''}</td></tr>`;
 function bindAnularMov(root = document) {
   $$('[data-manul]', root).forEach(b => b.onclick = () => { const [col, id] = b.dataset.manul.split(':'); const m = movimientos().find(x => x.col === col && x.x.id === id); if (m) anularMovimiento(m); });
 }
@@ -2641,27 +2662,27 @@ routes.movimientos = {
     if (a > b) [a, b] = [b, a];
     const t = ['ingreso', 'egreso'].includes(q.get('t')) ? q.get('t') : '', c = q.get('c') || '', verAnul = q.get('x') === '1';
     const url = (o = {}) => { const p = new URLSearchParams({ a, b, t, c, x: verAnul ? '1' : '', ...o }); [...p.keys()].forEach(k => !p.get(k) && p.delete(k)); return '#/movimientos?' + p; };
-    const todos = movimientos().filter(m => puedeMov(m) && m.fecha >= a && m.fecha <= b);
+    const todos = [...movimientos().filter(puedeMov), ...pagosDeuda()].filter(m => m.fecha >= a && m.fecha <= b).sort((x, y) => y.fecha.localeCompare(x.fecha) || y.ts - x.ts);
     const cats = [...new Set(todos.filter(m => !t || m.tipo === t).map(m => m.cat))].sort();
     const lista = todos.filter(m => (!t || m.tipo === t) && (!c || m.cat === c) && (verAnul || !m.x.anulado));
     const vivos = todos.filter(m => !m.x.anulado), deTipo = k => vivos.filter(m => m.tipo === k); // los totales son de todas las fechas elegidas, sin filtro
     const tIng = round2(deTipo('ingreso').reduce((s, m) => s + m.monto, 0)), tEgr = round2(deTipo('egreso').reduce((s, m) => s + m.monto, 0));
-    const ventas = round2(db.pagos.filter(p => p.fecha >= a && p.fecha <= b).reduce((s, p) => s + num(p.monto), 0));
+    const ventas = round2(db.pagos.filter(p => p.tipo !== 'saldo' && p.fecha >= a && p.fecha <= b).reduce((s, p) => s + num(p.monto), 0)); // lo cobrado al vender; los pagos de deuda van en ingresos
     const porCat = {}; vivos.forEach(m => { const k = m.tipo + '|' + m.cat; porCat[k] = (porCat[k] || 0) + m.monto; });
     const catFilas = Object.entries(porCat).map(([k, v]) => { const [tp, n] = k.split('|'); return { tp, n, v: round2(v) }; }).sort((x, y) => (x.tp === y.tp ? 0 : x.tp === 'ingreso' ? -1 : 1) || y.v - x.v);
     const nAnul = todos.filter(m => m.x.anulado && (!t || m.tipo === t) && (!c || m.cat === c)).length;
     const mes = hoy().slice(0, 8) + '01', finAnt = addDays(mes, -1);
     const rapidos = [['Hoy', hoy(), hoy()], ['Ayer', addDays(hoy(), -1), addDays(hoy(), -1)], ['7 días', addDays(hoy(), -6), hoy()], ['30 días', addDays(hoy(), -29), hoy()], ['Este mes', mes, hoy()], ['Mes pasado', finAnt.slice(0, 8) + '01', finAnt]];
     const plural = (n, s) => `${n} ${s}${n === 1 ? '' : 's'}`;
-    return `<div class="page-head"><div><h1>Ingresos y egresos</h1><p>Sueldos, gastos, compras, ganancia de los socios y otros ingresos. Se anotan el mismo día.</p></div>
+    return `<div class="page-head"><div><h1>Ingresos y egresos</h1><p>Pagos de deudas, sueldos, gastos, compras, ganancia de los socios y otros ingresos. Se anotan el mismo día.</p></div>
       <div class="actions">${puede('gastos') ? `<button class="btn mv-ing" data-nuevo="ingreso">${icon('plus')} Ingreso</button>` : ''}<button class="btn primary mv-egr" data-nuevo="egreso">${icon('plus')} Egreso</button></div></div>
       <div class="card card-b rango"><form id="mvf" class="rg-f"><label class="f">Desde<input class="inp" type="date" name="a" value="${a}" max="${hoy()}" required></label>
         <label class="f">Hasta<input class="inp" type="date" name="b" value="${b}" max="${hoy()}" required></label><button class="btn primary">Ver</button></form>
         <div class="pick">${rapidos.map(([n, x, y]) => `<button type="button" data-go="${url({ a: x, b: y })}" class="${x === a && y === b ? 'on' : ''}">${n}</button>`).join('')}</div></div>
       <div class="grid g4 mt">
-        <div class="card kpi" style="--c:#059669"><div class="l"><i>${icon('trend')}</i>Otros ingresos</div><div class="v num" style="color:var(--ok)">${money(tIng)}</div><div class="s">${plural(deTipo('ingreso').length, 'movimiento')}</div></div>
+        <div class="card kpi" style="--c:#059669"><div class="l"><i>${icon('trend')}</i>Ingresos</div><div class="v num" style="color:var(--ok)">${money(tIng)}</div><div class="s">${(n => n ? `Pagos de deuda: ${money(n)}` : plural(deTipo('ingreso').length, 'movimiento'))(round2(deTipo('ingreso').filter(m => m.cat === CAT_DEUDA || m.cat === CAT_ANTIGUA).reduce((x, m) => x + m.monto, 0)))}</div></div>
         <div class="card kpi" style="--c:#e11d48"><div class="l"><i>${icon('wallet')}</i>Egresos</div><div class="v num" style="color:var(--danger)">${money(tEgr)}</div><div class="s">${plural(deTipo('egreso').length, 'movimiento')}</div></div>
-        <div class="card kpi" style="--c:#1e4fea"><div class="l"><i>${icon('cash')}</i>Cobrado en ventas</div><div class="v num">${money(ventas)}</div><div class="s">En las mismas fechas</div></div>
+        <div class="card kpi" style="--c:#1e4fea"><div class="l"><i>${icon('cash')}</i>Cobrado en ventas</div><div class="v num">${money(ventas)}</div><div class="s">Lo pagado al momento de vender</div></div>
         <div class="card kpi" style="--c:#7c3aed"><div class="l"><i>${icon('bars')}</i>Queda</div><div class="v num">${money(ventas + tIng - tEgr)}</div><div class="s">Ventas + ingresos − egresos</div></div>
       </div>
       <div class="split mt mv-split">
@@ -3884,7 +3905,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.26.1';
+const APP_VERSION = '2026.09.26.2';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
