@@ -91,7 +91,7 @@ const I = {
 };
 const TILE = { inicio: '#1e4fea', pacientes: '#0891b2', ordenes: '#7c3aed', caja: '#059669', movimientos: '#d97706', reportes: '#4f46e5', inventario: '#c026d3', recordatorios: '#e11d48', ajustes: '#475569', mas: '#475569' };
 // Encabezado de la barra superior: [antetítulo, título] por sección.
-const CABECERA = { inicio: ['Resumen del día', 'Inicio'], pacientes: ['Fichas y medidas', 'Pacientes'], paciente: ['Pacientes', 'Ficha del paciente'], ordenes: ['Laboratorio y entregas', 'Pedidos'], orden: ['Pedidos', 'Detalle del pedido'], 'nueva-orden': ['Vender', 'Nueva venta'], caja: ['Cobros y gastos', 'Caja del día'], movimientos: ['Entradas y salidas', 'Ingresos y egresos'], reportes: ['Cómo va la óptica', 'Reportes'], contador: ['Reportes', 'Reporte para el contador'], inventario: ['Stock', 'Inventario'], recordatorios: ['Clientes para llamar', 'Recordatorios'], ajustes: ['Tu óptica', 'Ajustes'], aprobar: ['Autorización', 'Aprobar pedido'] };
+const CABECERA = { inicio: ['Resumen del día', 'Inicio'], pacientes: ['Fichas y medidas', 'Pacientes'], paciente: ['Pacientes', 'Ficha del paciente'], ordenes: ['Laboratorio y entregas', 'Pedidos'], orden: ['Pedidos', 'Detalle del pedido'], 'nueva-orden': ['Vender', 'Nueva venta'], caja: ['Cobros y gastos', 'Caja del día'], movimientos: ['Entradas y salidas', 'Ingresos y egresos'], reportes: ['Cómo va la óptica', 'Reportes'], contador: ['Reportes', 'Reporte para el contador'], reparto: ['Caja', 'Reparto de ganancias'], inventario: ['Stock', 'Inventario'], recordatorios: ['Clientes para llamar', 'Recordatorios'], ajustes: ['Tu óptica', 'Ajustes'], aprobar: ['Autorización', 'Aprobar pedido'] };
 const tile = (k, i) => `<span class="tile" style="--c:${TILE[k]}">${icon(i)}</span>`;
 const icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${I[n] || ''}</svg>`;
 
@@ -119,7 +119,7 @@ let user = null; // persona de la óptica que usa el sistema (sale del usuario c
 function blank() {
   return {
     config: { nombre: '', ruc: '', direccion: '', telefono: '', recordatorioMeses: 12, nextOrden: 1, nextMontura: 1, socios: [], fact: FACT_DEF(), abrev: ABREV_DEF(), tarifasV: 1, productosV: 2, directaV: 1 },
-    pacientes: [], medidas: [], monturas: [], cristales: [], tarifas: [], productos: productosDef(), anuladas: [], ordenes: [], pagos: [], gastos: [], ingresos: [], vales: [], cierres: [], log: [], comprobantes: [], aprobaciones: [],
+    pacientes: [], medidas: [], monturas: [], cristales: [], tarifas: [], productos: productosDef(), anuladas: [], ordenes: [], pagos: [], gastos: [], ingresos: [], vales: [], cierres: [], log: [], comprobantes: [], aprobaciones: [], repartos: [],
   };
 }
 // Completa los datos guardados con versiones anteriores del sistema.
@@ -140,6 +140,7 @@ function normDb(d) {
   }
   d.anuladas = d.anuladas || [];
   d.ingresos = d.ingresos || [];
+  d.repartos = d.repartos || [];
   // Las ventas directas (sin lunas) ya pagadas que quedaron "En laboratorio" pasan a entregadas.
   if (!d.config.directaV) {
     d.ordenes.forEach(o => {
@@ -187,7 +188,7 @@ const numPago = v => num(String(v ?? '').replace(/[^\d.,]/g, ''));
 // ---------- Nube: cuenta de la óptica y sincronización ----------
 // Cada registro (paciente, orden, pago…) se guarda aparte en la nube, repartido en varios documentos.
 // Así dos equipos pueden trabajar a la vez sin pisarse: solo se sube lo que cambió.
-const COLS = { pacientes: 16, medidas: 16, monturas: 16, ordenes: 16, pagos: 16, comprobantes: 16, gastos: 4, ingresos: 4, log: 4, anuladas: 4, vales: 2, cierres: 2, cristales: 2, aprobaciones: 2 };
+const COLS = { pacientes: 16, medidas: 16, monturas: 16, ordenes: 16, pagos: 16, comprobantes: 16, gastos: 4, ingresos: 4, log: 4, anuladas: 4, vales: 2, cierres: 2, cristales: 2, aprobaciones: 2, repartos: 2 };
 const LISTAS = ['tarifas', 'productos']; // se guardan completas en el documento "listas"
 let sesion = { cargando: true }; // { usuario, perfil, optica, error }
 let quitarDatos = null;
@@ -397,7 +398,7 @@ const PERMISOS = [
   ['Caja y dinero', [
     ['descuentos', 'Dar descuentos y cambiar precios en la venta'],
     ['gastos', 'Anotar y ver ingresos y egresos (sueldos, gastos…)'],
-    ['vales', 'Anotar la ganancia que retira el dueño o un socio (vales)'],
+    ['vales', 'Anotar vales: ganancia que retira el dueño o un socio y adelantos de sueldo (nunca un vendedor)'],
     ['cerrarCaja', 'Cerrar la caja del día'],
     ['otrosDias', 'Ver la caja de otros días'],
     ['ganancias', 'Ver la ganancia y el reparto entre socios'],
@@ -420,9 +421,10 @@ const PERMISOS_ROL = {
   socio: PERMISO_KEYS.filter(k => !['ajustes', 'precios', 'anular'].includes(k)),
   vendedor: [],
 };
-const permisosDe = s => socioRol(s) === 'dueno' ? PERMISO_KEYS : Array.isArray(s?.permisos) ? s.permisos : PERMISOS_ROL[socioRol(s)];
+// Los vales (ganancia de los socios y adelantos de sueldo) solo los anotan el dueño y los socios, aunque se le marque a un vendedor.
+const permisosDe = s => socioRol(s) === 'dueno' ? PERMISO_KEYS : (Array.isArray(s?.permisos) ? s.permisos : PERMISOS_ROL[socioRol(s)]).filter(k => k !== 'vales' || socioRol(s) !== 'vendedor');
 const puede = accion => !PERMISO_KEYS.includes(accion) || permisosDe(me()).includes(accion);
-const puedeVer = k => k === 'movimientos' ? puede('gastos') || puede('vales') : k === 'contador' ? puede('reportes') : puede(k);
+const puedeVer = k => k === 'movimientos' ? puede('gastos') || puede('vales') : k === 'reparto' ? puede('ganancias') : k === 'contador' ? puede('reportes') : puede(k);
 const paciente = id => db.pacientes.find(p => p.id === id);
 const orden = id => db.ordenes.find(o => o.id === id);
 // Nombre para mostrar: el paciente, o el cliente de una venta rápida (sin paciente registrado).
@@ -2590,7 +2592,7 @@ routes.caja = {
         <div class="card"><div class="card-h"><h3>Cuadre por método</h3></div><div class="card-b tbl-wrap"><table><thead><tr><th>Método</th><th class="r">Entró</th><th class="r">Salió</th><th class="r">Queda</th></tr></thead><tbody>
           ${c.porMetodo.map(x => `<tr><td><span class="row" style="gap:8px"><i style="width:10px;height:10px;border-radius:3px;background:${METODO_COLOR[x.m]}"></i>${x.m}</span></td><td class="r num">${money(x.inn)}</td><td class="r num muted">${x.out ? '− ' + money(x.out) : '—'}</td><td class="r num strong">${money(x.neto)}</td></tr>`).join('')}</tbody>
           <tfoot><tr><td>Total</td><td class="r num">${money(c.ingresos)}</td><td class="r num">− ${money(c.tGastos + c.vales.reduce((s, v) => s + num(v.monto), 0))}</td><td class="r num">${money(c.porMetodo.reduce((s, x) => s + x.neto, 0))}</td></tr></tfoot></table></div></div>
-        ${!puede('ganancias') ? '' : `<div class="card"><div class="card-h"><h3>Ganancia por socio</h3><span class="sub">Ganancia ${money(c.utilidad)}</span></div><div class="card-b"><div class="grid g2 partner-grid" style="gap:12px">
+        ${!puede('ganancias') ? '' : `<div class="card"><div class="card-h wrap" style="gap:8px"><h3>Ganancia por socio</h3><span class="sub">Del día: ${money(c.utilidad)}</span><a class="btn sm" href="#/reparto" style="margin-left:auto">Reparto de la semana</a></div><div class="card-b"><div class="grid g2 partner-grid" style="gap:12px">
           ${c.socios.map(s => `<div class="partner"><div class="row" style="gap:10px"><span class="avatar">${initials(s.nombre)}</span><b>${esc(s.nombre)}</b><span class="muted small" style="margin-left:auto">${s.pct}%</span></div>
             <div class="cash-sum mt-s small"><div class="line" style="padding:2px 0"><span class="muted">Su parte</span><span class="num">${money(s.parte)}</span></div><div class="line" style="padding:2px 0"><span class="muted">Vales</span><span class="num">− ${money(s.vales)}</span></div></div>
             <div class="v num">${money(s.neto)}</div></div>`).join('')}</div></div></div>`}
@@ -2617,7 +2619,10 @@ const anulable = f => !!f && f <= hoy() && daysBetween(f, hoy()) < DIAS_ANULAR;
 const noAnulable = () => toast(`Solo se puede anular lo de los últimos ${DIAS_ANULAR} días (hoy, ayer y anteayer).`);
 const vivo = x => !x.anulado;
 const CAT_VALE = 'Ganancia del dueño y socios'; // se descuenta de la parte de esa persona en la caja (antes "vale")
-const CAT_EGRESO = [['Sueldos', 'users'], ['Gastos', 'cash'], ['Compras de mercadería', 'box'], ['Laboratorio', 'eye'], [CAT_VALE, 'wallet'], ['Otros egresos', 'apps']];
+const CAT_ADELANTO = 'Adelanto de sueldo'; // vale de un vendedor: sale como sueldo (gasto) y se ve en el reparto de la semana
+const CAT_EGRESO = [['Sueldos', 'users'], ['Gastos', 'cash'], ['Compras de mercadería', 'box'], ['Laboratorio', 'eye'], [CAT_VALE, 'wallet'], [CAT_ADELANTO, 'wallet'], ['Otros egresos', 'apps']];
+const vendedores = () => activos().filter(s => socioRol(s) === 'vendedor');
+const esVale = c => c === CAT_VALE || c === CAT_ADELANTO;
 const CAT_ANTIGUA = 'Deuda antigua'; // cliente que debía de antes del sistema: solo entra a la caja, no crea venta
 const CAT_INGRESO = [[CAT_ANTIGUA, 'clock'], ['Otros ingresos', 'trend'], ['Aporte del dueño o socios', 'users'], ['Préstamo', 'cash']];
 const SIN_GANANCIA = ['Aporte del dueño o socios', 'Préstamo']; // entran a la caja pero no son ganancia
@@ -2626,24 +2631,25 @@ const ganaIngreso = x => !SIN_GANANCIA.includes(x.categoria);
 function movimientos() {
   return [
     ...db.ingresos.map(x => ({ x, col: 'ingresos', tipo: 'ingreso', cat: x.categoria || 'Otros ingresos', det: [x.cliente, x.obs].filter(Boolean).join(' · '), metodo: x.metodo || 'Efectivo' })),
-    ...db.gastos.map(x => ({ x, col: 'gastos', tipo: 'egreso', cat: x.categoria || 'Gastos', det: x.categoria ? x.obs || '' : x.concepto || '', metodo: x.metodo || 'Efectivo' })),
+    ...db.gastos.map(x => ({ x, col: 'gastos', tipo: 'egreso', cat: x.categoria || 'Gastos', persona: x.personaId, det: x.categoria ? x.obs || '' : x.concepto || '', metodo: x.metodo || 'Efectivo' })),
     ...db.vales.map(x => ({ x, col: 'vales', tipo: 'egreso', cat: CAT_VALE, persona: x.socioId, det: x.concepto || '', metodo: x.metodo || 'Efectivo' })),
   ].map(m => ({ ...m, fecha: m.x.fecha, monto: num(m.x.monto), ts: m.x.ts || 0, por: m.x.por })).sort((a, b) => b.fecha.localeCompare(a.fecha) || b.ts - a.ts);
 }
-const puedeMov = m => m.col === 'vales' ? puede('vales') : puede('gastos');
+const puedeMov = m => m.col === 'vales' ? puede('vales') : m.cat === CAT_ADELANTO ? puede('vales') || puede('gastos') : puede('gastos');
 function movimientoForm(tipo, cat) {
   const d = hoy(), ing = tipo === 'ingreso';
-  const lista = (ing ? CAT_INGRESO : CAT_EGRESO).filter(([c]) => c === CAT_VALE ? puede('vales') : puede('gastos'));
+  const lista = (ing ? CAT_INGRESO : CAT_EGRESO).filter(([c]) => c === CAT_ADELANTO ? puede('vales') && vendedores().length : c === CAT_VALE ? puede('vales') : puede('gastos'));
   if (!lista.length) return toast('No tienes permiso para anotar esto');
   // Categorías que la óptica creó antes (con "Otra…") también aparecen.
-  const propias = puede('gastos') ? [...new Set(movimientos().filter(m => m.tipo === tipo && m.col !== 'vales').map(m => m.cat))].filter(c => !lista.some(([n]) => n === c)) : [];
+  const propias = puede('gastos') ? [...new Set(movimientos().filter(m => m.tipo === tipo && m.col !== 'vales').map(m => m.cat))].filter(c => !esVale(c) && !lista.some(([n]) => n === c)) : [];
   cat = cat && [...lista.map(([c]) => c), ...propias].includes(cat) ? cat : lista[0][0];
   modal({
     title: ing ? 'Registrar ingreso' : 'Registrar egreso',
     body: `<form id="mf" class="form"><div class="lock-note mv-hoy">${icon('clock')}<div>Se anota con fecha de <b>hoy, ${fdate(d)}</b>.</div></div>
       <div class="fld">Categoría<div class="pick mv-cats" id="mcats">${lista.map(([c, i]) => `<button type="button" data-c="${esc(c)}">${icon(i)} ${esc(c)}</button>`).join('')}${propias.map(c => `<button type="button" data-c="${esc(c)}">${esc(c)}</button>`).join('')}${puede('gastos') ? `<button type="button" data-c="" id="motra">${icon('plus')} Otra…</button>` : ''}</div></div>
       <label class="f" id="mnueva" style="display:none">Nombre de la categoría<input class="inp" name="nueva" maxlength="40" placeholder="${ing ? 'Ej. Alquiler de consultorio' : 'Ej. Publicidad, movilidad…'}"></label>
-      <label class="f" id="mper" style="display:none">¿Para quién?<select class="inp" name="socioId">${autorizantes().map(s => `<option value="${s.id}" ${s.id === user ? 'selected' : ''}>${esc(s.nombre)}</option>`).join('')}</select><span class="hint">Se descuenta de la ganancia de esa persona en la caja.</span></label>
+      <label class="f" id="mper" style="display:none">¿Para quién?<select class="inp" name="socioId">${autorizantes().map(s => `<option value="${s.id}" ${s.id === user ? 'selected' : ''}>${esc(s.nombre)}</option>`).join('')}</select><span class="hint">Se descuenta de la ganancia de esa persona en la caja y en el reparto de la semana.</span></label>
+      <label class="f" id="mven" style="display:none">¿Qué vendedor?<select class="inp" name="personaId">${vendedores().map(s => `<option value="${s.id}">${esc(s.nombre)}</option>`).join('')}</select><span class="hint">Sale de la caja como sueldo. En el reparto de la semana se ve cuánto lleva en adelantos.</span></label>
       <label class="f">Monto<input class="inp" name="monto" inputmode="decimal" required placeholder="0.00"></label>
       <div class="pay-opts">${METODOS.map((m, i) => `<label><input type="radio" name="metodo" value="${m}" ${i === 0 ? 'checked' : ''}><span>${m}</span></label>`).join('')}</div>
       <label class="f">${ing ? 'Observación' : 'Detalle'} <span class="hint" id="mobs">(opcional)</span><textarea class="inp" name="obs" rows="2" placeholder="${ing ? 'Ej. Jorge puso sencillo para la caja' : 'Ej. Sueldo de Ana, recibo de luz de setiembre…'}"></textarea></label>
@@ -2654,8 +2660,8 @@ function movimientoForm(tipo, cat) {
         $$('#mcats button', bg).forEach(b => b.classList.toggle('on', b.dataset.c === cat));
         $('[name=obs]', bg).placeholder = cat === CAT_ANTIGUA ? 'Ej. Abono de S/ 100 de Carmen Ruiz' : ing ? 'Ej. Jorge puso sencillo para la caja' : 'Ej. Sueldo de Ana, recibo de luz de setiembre…';
         $('#mobs', bg).textContent = cat === CAT_ANTIGUA ? '(de quién es el abono)' : '(opcional)';
-        $('#mnueva', bg).style.display = cat === '' ? '' : 'none'; $('#mper', bg).style.display = cat === CAT_VALE ? '' : 'none';
-        $('#mhint', bg).textContent = ing ? (SIN_GANANCIA.includes(cat) ? 'Entra a la caja, pero no se cuenta como ganancia.' : cat === CAT_ANTIGUA ? 'Para clientes que deben de antes del sistema: no crea ninguna venta, solo entra a la caja.' : 'Entra a la caja y suma a la ganancia del día.') : cat === CAT_VALE ? '' : 'Sale de la caja y se resta de la ganancia del día.';
+        $('#mnueva', bg).style.display = cat === '' ? '' : 'none'; $('#mper', bg).style.display = cat === CAT_VALE ? '' : 'none'; $('#mven', bg).style.display = cat === CAT_ADELANTO ? '' : 'none';
+        $('#mhint', bg).textContent = ing ? (SIN_GANANCIA.includes(cat) ? 'Entra a la caja, pero no se cuenta como ganancia.' : cat === CAT_ANTIGUA ? 'Para clientes que deben de antes del sistema: no crea ninguna venta, solo entra a la caja.' : 'Entra a la caja y suma a la ganancia del día.') : esVale(cat) ? '' : 'Sale de la caja y se resta de la ganancia del día.';
       };
       $$('#mcats button', bg).forEach(b => b.onclick = () => { cat = b.dataset.c; pintar(); if (cat === '') $('[name=nueva]', bg).focus(); if (cat === CAT_ANTIGUA) $('[name=monto]', bg).focus(); });
       pintar();
@@ -2670,6 +2676,7 @@ function movimientoForm(tipo, cat) {
         const guardar = () => {
           if (ing) db.ingresos.push({ ...base, categoria, obs });
           else if (categoria === CAT_VALE) db.vales.push({ ...base, socioId: f.socioId, concepto: obs });
+          else if (categoria === CAT_ADELANTO) db.gastos.push({ ...base, categoria, personaId: f.personaId, concepto: obs || categoria, obs });
           else db.gastos.push({ ...base, categoria, concepto: obs || categoria, obs });
           save(); closeModal(); toast(`${ing ? 'Ingreso' : 'Egreso'} de ${money(monto)} registrado`); render();
         };
@@ -2681,6 +2688,8 @@ function movimientoForm(tipo, cat) {
 // Anular: queda en la historia tachado (con quién y cuándo) y deja de contar en la caja.
 function anularMovimiento(m) {
   if (!anulable(m.fecha)) return noAnulable();
+  const r = repartoDe(m.x);
+  if (r) return toast(`Ya entró en el reparto del ${fdate(r.hasta)}. Para anularlo, primero deshaz ese reparto.`);
   const quien = m.persona ? ' de ' + socioName(m.persona) : '';
   dual(`Anular ${m.tipo} de ${money(m.monto)} · ${m.cat}${quien} (${fdate(m.fecha)})`, () => { m.x.anulado = { ts: Date.now(), por: user }; save(); toast('Movimiento anulado'); render(); });
 }
@@ -2740,6 +2749,78 @@ routes.movimientos = {
     $('#mvcat') && ($('#mvcat').onchange = e => ir({ c: e.target.value }));
     $('#mvanul') && ($('#mvanul').onchange = e => ir({ x: e.target.checked ? '1' : '' }));
     bindAnularMov();
+  },
+};
+// ---------- Reparto de ganancias (cierre de la semana) ----------
+// Junta todo desde el último reparto hasta ahora: la ganancia, la parte de cada socio menos sus vales,
+// y los adelantos de sueldo de los vendedores. Al cerrar se guarda una foto de las cuentas.
+const repartosVivos = () => db.repartos.filter(vivo).sort((a, b) => (a.ts || 0) - (b.ts || 0));
+const ultimoReparto = () => repartosVivos().slice(-1)[0];
+// ¿El registro x pasó después del reparto r? (el mismo día cuenta la hora)
+const despuesDe = (x, r) => x.fecha > r.hasta || (x.fecha === r.hasta && (x.ts || 0) > r.ts);
+const repartoDe = x => repartosVivos().find(r => !despuesDe(x, r) && x.fecha >= r.desde);
+const lunesDe = d => addDays(d, -((new Date(d + 'T12:00:00').getDay() + 6) % 7));
+const desdeReparto = q => !ultimoReparto() && esFecha(q?.get('desde')) && q.get('desde') <= hoy() ? q.get('desde') : lunesDe(hoy());
+function repartoData(desde) {
+  const r = ultimoReparto(), h = hoy();
+  const entra = x => x.fecha <= h && (r ? despuesDe(x, r) : x.fecha >= desde);
+  const pagos = db.pagos.filter(entra);
+  const otros = db.ingresos.filter(x => vivo(x) && entra(x));
+  const gastos = db.gastos.filter(x => vivo(x) && entra(x));
+  const vales = db.vales.filter(x => vivo(x) && entra(x)).sort((a, b) => a.fecha.localeCompare(b.fecha) || (a.ts || 0) - (b.ts || 0));
+  const suma = l => round2(l.reduce((s, x) => s + num(x.monto), 0));
+  const ventas = suma(pagos), tOtros = suma(otros.filter(ganaIngreso)), tGastos = suma(gastos);
+  const utilidad = round2(ventas + tOtros - tGastos);
+  const ids = [...new Set([...autorizantes().map(s => s.id), ...vales.map(v => v.socioId)])];
+  const socios = ids.map(id => {
+    const s = socio(id) || { id, nombre: '—', pct: 0 }, vs = vales.filter(v => v.socioId === id), parte = round2(utilidad * num(s.pct) / 100);
+    return { id, nombre: s.nombre, pct: num(s.pct), parte, vales: vs, tVales: suma(vs), neto: round2(parte - suma(vs)) };
+  });
+  const adel = gastos.filter(g => g.categoria === CAT_ADELANTO);
+  const vends = [...new Set([...vendedores().map(s => s.id), ...adel.map(g => g.personaId)])]
+    .map(id => { const l = adel.filter(g => g.personaId === id); return { id, nombre: socioName(id), adelantos: l, total: suma(l) }; });
+  return { r, desde: r ? r.hasta : desde, ventas, tOtros, tGastos, utilidad, socios, vendedores: vends };
+}
+routes.reparto = {
+  html(_, q) {
+    const c = repartoData(desdeReparto(q)), puedeCerrar = puede('cerrarCaja') && miRol() !== 'vendedor';
+    const hist = repartosVivos().reverse();
+    const valeFila = v => `<div class="line small" style="padding:2px 0"><span class="muted">${fcorta(v.fecha)}${v.concepto && v.concepto !== CAT_ADELANTO ? ' · ' + esc(v.concepto) : ''}</span><span class="num">− ${money(v.monto)}</span></div>`;
+    return `<div class="page-head"><div><h1>Reparto de ganancias</h1><p>${c.r ? `Desde el último reparto (${flong(c.r.hasta)}, ${new Date(c.r.ts).toTimeString().slice(0, 5)}) hasta hoy.` : `Del ${flong(c.desde)} hasta hoy.`} Aquí se ven los vales que sacó cada uno.</p></div>
+      <div class="actions"><a class="btn" href="#/caja">${icon('back')} Caja del día</a>${puedeCerrar ? `<button class="btn primary" id="rcerrar">${icon('lock')} Cerrar semana</button>` : ''}</div></div>
+      ${!c.r ? `<div class="card card-b rango"><form id="rdf" class="rg-f"><label class="f">Contar desde<input class="inp" type="date" name="desde" value="${c.desde}" max="${hoy()}" required></label><button class="btn">Ver</button></form><p class="hint" style="margin:0">Es el primer reparto. Elige desde qué día cuentan; los siguientes empiezan solos donde terminó el anterior.</p></div>` : ''}
+      <div class="grid g4 mt">
+        <div class="card kpi" style="--c:#1e4fea"><div class="l"><i>${icon('cash')}</i>Cobrado en ventas</div><div class="v num">${money(c.ventas)}</div></div>
+        <div class="card kpi" style="--c:#059669"><div class="l"><i>${icon('trend')}</i>Otros ingresos</div><div class="v num">${money(c.tOtros)}</div><div class="s">Sin aportes ni préstamos</div></div>
+        <div class="card kpi" style="--c:#e11d48"><div class="l"><i>${icon('wallet')}</i>Gastos</div><div class="v num">${money(c.tGastos)}</div><div class="s">Incluye sueldos y adelantos</div></div>
+        <div class="card kpi" style="--c:#7c3aed"><div class="l"><i>${icon('bars')}</i>Ganancia</div><div class="v num">${money(c.utilidad)}</div><div class="s">Para repartir</div></div>
+      </div>
+      <div class="card mt"><div class="card-h"><h3>Lo que le toca a cada uno</h3><span class="sub">Su parte menos sus vales</span></div><div class="card-b"><div class="grid g2 partner-grid rep-grid" style="gap:12px">
+        ${c.socios.map(s => `<div class="partner"><div class="row" style="gap:10px"><span class="avatar">${initials(s.nombre)}</span><b>${esc(s.nombre)}</b><span class="muted small" style="margin-left:auto">${s.pct}%</span></div>
+          <div class="cash-sum mt-s small"><div class="line" style="padding:2px 0"><span class="muted">Su parte</span><span class="num">${money(s.parte)}</span></div>
+            ${s.vales.length ? `<div class="line" style="padding:2px 0"><b>Vales (${s.vales.length})</b><span class="num strong">− ${money(s.tVales)}</span></div>${s.vales.map(valeFila).join('')}` : `<div class="line" style="padding:2px 0"><span class="muted">Vales</span><span class="num">—</span></div>`}</div>
+          <div class="muted small mt-s">Le toca recibir</div><div class="v num" style="${s.neto < 0 ? 'color:var(--danger)' : ''}">${money(s.neto)}</div>${s.neto < 0 ? `<div class="small" style="color:var(--danger)">Sacó más que su parte</div>` : ''}</div>`).join('')}</div></div></div>
+      ${c.vendedores.length ? `<div class="card mt"><div class="card-h"><h3>Adelantos de sueldo</h3><span class="sub">Vendedores</span></div><div class="card-b"><div class="grid g2 partner-grid rep-grid" style="gap:12px">
+        ${c.vendedores.map(v => `<div class="partner"><div class="row" style="gap:10px"><span class="avatar">${initials(v.nombre)}</span><b>${esc(v.nombre)}</b></div>
+          <div class="cash-sum mt-s small">${v.adelantos.length ? v.adelantos.map(valeFila).join('') : `<div class="line" style="padding:2px 0"><span class="muted">Sin adelantos</span><span class="num">—</span></div>`}</div>
+          <div class="muted small mt-s">Lleva en adelantos</div><div class="v num">${money(v.total)}</div></div>`).join('')}</div>
+        <p class="hint" style="margin:12px 0 0">Al pagarle su sueldo, dale el resto y anótalo en Egreso → Sueldos.</p></div></div>` : ''}
+      <div class="card mt"><div class="card-h"><h3>Repartos anteriores</h3></div><div class="card-b tbl-wrap">${hist.length ? `<table><thead><tr><th>Semana</th><th class="r">Ganancia</th><th>Recibió cada uno</th><th></th></tr></thead><tbody>
+        ${hist.map((r, i) => `<tr><td class="nowrap">${fcorta(r.desde)} – ${fcorta(r.hasta)}<div class="muted small">cerró ${esc(socioName(r.por))}</div></td><td class="r num">${money(r.utilidad)}</td>
+          <td class="small">${r.socios.map(s => `${esc(s.nombre)}: <b class="num">${money(s.neto)}</b>${s.tVales ? ` <span class="muted">(vales ${money(s.tVales)})</span>` : ''}`).join('<br>')}${(r.vendedores || []).filter(v => v.total).map(v => `<br><span class="muted">Adelantos ${esc(v.nombre)}: ${money(v.total)}</span>`).join('')}</td>
+          <td>${i === 0 && puedeCerrar ? `<button class="btn ghost sm" id="rdeshacer">Deshacer</button>` : ''}</td></tr>`).join('')}</tbody></table>` : `<div class="empty" style="padding:14px">Todavía no cerraron ninguna semana.</div>`}</div></div>`;
+  },
+  bind(_, q) {
+    $('#rdf') && ($('#rdf').onsubmit = e => { e.preventDefault(); go('#/reparto?desde=' + readForm(e.target).desde); });
+    $('#rcerrar') && ($('#rcerrar').onclick = () => {
+      const c = repartoData(desdeReparto(q));
+      confirmBox(`¿Cerrar la semana (${fcorta(c.desde)} al ${fcorta(hoy())})? Ganancia ${money(c.utilidad)}. ${c.socios.map(s => `${s.nombre} recibe ${money(s.neto)}`).join(', ')}. El próximo reparto empieza desde ahora.`, () => {
+        db.repartos.push({ id: uid(), desde: c.desde, hasta: hoy(), ts: Date.now(), por: user, ventas: c.ventas, otros: c.tOtros, gastos: c.tGastos, utilidad: c.utilidad,
+          socios: c.socios.map(s => ({ id: s.id, nombre: s.nombre, pct: s.pct, parte: s.parte, tVales: s.tVales, neto: s.neto })), vendedores: c.vendedores.map(v => ({ id: v.id, nombre: v.nombre, total: v.total })) });
+        addLog(`Reparto de ganancias del ${c.desde} al ${hoy()}: ${money(c.utilidad)}`); save(); toast('Semana cerrada'); render();
+      }, 'Cerrar semana');
+    });
+    $('#rdeshacer') && ($('#rdeshacer').onclick = () => { const r = ultimoReparto(); dual(`Deshacer el reparto del ${fdate(r.desde)} al ${fdate(r.hasta)}`, () => { r.anulado = { ts: Date.now(), por: user }; save(); toast('Reparto deshecho'); render(); }); });
   },
 };
 function cajaCSV(d) {
@@ -3937,6 +4018,7 @@ function personaForm(s) {
         $$('#prol button', bg).forEach(b => b.classList.toggle('on', b.dataset.r === rol));
         $('#ppct', bg) && ($('#ppct', bg).hidden = rol !== 'socio');
         $('#ppin', bg).hidden = !esD && rol === 'vendedor';
+        $$('[data-perm=vales]', bg).forEach(c => { c.disabled = rol === 'vendedor'; if (c.disabled) c.checked = false; });
         $('#prolh', bg) && ($('#prolh', bg).textContent = rol === 'socio' ? 'Es dueño de una parte: autoriza cambios delicados con su clave y recibe su parte de la ganancia.' : 'Trabaja en la óptica: no recibe ganancia ni autoriza cambios con clave.');
       };
       $$('#prol button', bg).forEach(b => b.onclick = () => { rol = b.dataset.r; if (!tocados) $$('[data-perm]', bg).forEach(c => { c.checked = PERMISOS_ROL[rol].includes(c.dataset.perm); }); pintar(); });
@@ -4053,7 +4135,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.26.5';
+const APP_VERSION = '2026.09.27.1';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
