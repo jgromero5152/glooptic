@@ -351,6 +351,11 @@ button.lnk{background:none;border:0;padding:0;cursor:pointer;font-size:13px}
 .who button.on .avatar{background:var(--accent);color:#fff}
 .pin{letter-spacing:.5em;text-align:center;font-size:22px !important}
 .err{color:var(--danger);font-size:13.5px;min-height:20px;margin-top:8px}
+.pwd{position:relative;display:block}.pwd .inp{padding-right:46px}
+.pwd-ver{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:38px;height:38px;border:0;background:none;border-radius:8px;color:var(--muted);display:grid;place-items:center;cursor:pointer}
+.pwd-ver svg{width:20px;height:20px}.pwd-ver.on{color:var(--accent,#2563eb)}.pwd-ver:hover{background:rgba(0,0,0,.04)}
+.ayuda-clave{margin-top:10px;padding:12px;border-radius:10px;background:#fff7e6;border:1px solid #fde0a6;color:#7a4b00;font-size:13.5px;line-height:1.45}
+.ayuda-clave .btn{margin-top:10px;display:inline-flex;gap:6px;align-items:center}.ayuda-clave .btn svg{width:16px;height:16px}
 
 /* Search dropdown */
 .sr{position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 16px -4px rgba(16,24,40,.08),0 4px 6px -2px rgba(16,24,40,.03);max-height:420px;overflow:auto;z-index:50}
@@ -904,6 +909,6 @@ tbody tr.link:hover td{background:var(--surface-2)}
 <div id="root"></div>
 <div id="print"></div>
 <script type="module" src="nube.js?v=2026.09.26.3"></script>
-<script src="app.js?v=2026.09.27.1"></script>
+<script src="app.js?v=2026.10.02.1"></script>
 </body>
 </html>

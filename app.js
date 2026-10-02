@@ -688,6 +688,14 @@ function esperaView(txt, red) {
     ${red ? `<p class="hint" style="margin-top:10px">La primera vez en este equipo necesitas internet.</p>` : ''}</div></div>`;
 }
 let modoCuenta = 'ingresar';
+// Google bloquea la cuenta un rato tras varias claves equivocadas (no se puede cambiar): desde el 3er error se avisa y se ofrece pedir ayuda.
+let fallosClave = 0;
+function ayudaClave(bloqueado) {
+  const txt = bloqueado ? 'Hola, el sistema me bloqueó por poner mal la clave. ¿Me puedes poner una contraseña nueva?' : 'Hola, no recuerdo mi clave de TerraÓptica. ¿Me puedes poner una contraseña nueva?';
+  return `<div class="ayuda-clave">${bloqueado ? 'El sistema bloqueó la entrada un rato por seguridad. No intentes más: pide una contraseña nueva y entras al momento.'
+    : 'Cuidado: si sigues fallando, el sistema te bloquea un rato. Si no recuerdas tu clave, pide una nueva.'}
+    <a class="btn wa sm" href="${waSoporte(txt)}" target="_blank" rel="noopener">${icon('wa')} Pedir clave nueva</a></div>`;
+}
 function cuentaView() {
   const m = REGISTRO_ABIERTO || modoCuenta !== 'registrar' ? modoCuenta : 'ingresar';
   const tabs = !REGISTRO_ABIERTO ? '' : `<div class="seg to-tabs"><button type="button" data-mc="ingresar" class="${m === 'ingresar' ? 'on' : ''}">Ingresar</button><button type="button" data-mc="registrar" class="${m === 'registrar' ? 'on' : ''}">Crear cuenta</button></div>`;
@@ -706,7 +714,7 @@ function cuentaView() {
       <button type="button" class="btn ghost" data-mc="ingresar">Volver</button></form>`;
   else body = `<form id="cuenta" class="form">
       <label class="f">Usuario o correo<input class="inp" name="correo" required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
-      <label class="f">Clave<input class="inp" name="clave" type="password" required autocomplete="current-password"></label>
+      <label class="f">Clave<span class="pwd"><input class="inp" name="clave" type="password" required autocomplete="current-password"><button type="button" class="pwd-ver" aria-label="Ver clave" title="Ver clave">${icon('eye')}</button></span></label>
       <div class="err" id="cerr"></div><button class="btn primary" style="padding:12px">Ingresar</button>
       <button type="button" class="btn ghost sm" data-mc="recuperar">Olvidé mi clave</button></form>
       ${REGISTRO_ABIERTO ? '' : `<p class="hint" style="margin:16px 0 0;text-align:center">¿Quieres usar TerraÓptica en tu óptica? <a href="${waSoporte('Hola, quiero usar TerraÓptica en mi óptica.')}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">Escríbenos por WhatsApp</a></p>`}`;
@@ -717,6 +725,8 @@ function cuentaView() {
 function bindCuenta() {
   $$('[data-mc]').forEach(b => b.onclick = () => { modoCuenta = b.dataset.mc; render(); });
   const f = $('#cuenta'); $('input', f).focus();
+  const ver = $('.pwd-ver', f);
+  if (ver) ver.onclick = () => { const i = f.clave, oculto = i.type === 'password'; i.type = oculto ? 'text' : 'password'; ver.classList.toggle('on', oculto); ver.setAttribute('aria-label', oculto ? 'Ocultar clave' : 'Ver clave'); i.focus(); };
   f.onsubmit = async e => {
     e.preventDefault();
     const v = readForm(f), btn = $('button.primary', f), err = $('#cerr');
@@ -732,10 +742,15 @@ function bindCuenta() {
         registrando = false; await Nube.refrescar(); return;
       }
       await Nube.ingresar(v.correo, v.clave);
+      fallosClave = 0;
     } catch (x) {
       const fue = registrando; registrando = false;
       if (fue) { render(); $('#cerr').textContent = Nube.mensaje(x); return; }
       err.textContent = Nube.mensaje(x); btn.disabled = false;
+      if (modoCuenta !== 'ingresar') return;
+      const bloqueado = x.code === 'auth/too-many-requests';
+      if (x.code === 'auth/invalid-credential' || x.code === 'auth/wrong-password' || x.code === 'auth/user-not-found') fallosClave++;
+      if (bloqueado || fallosClave >= 3) err.insertAdjacentHTML('beforeend', ayudaClave(bloqueado));
     }
   };
 }
@@ -4135,7 +4150,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.09.27.1';
+const APP_VERSION = '2026.10.02.1';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {

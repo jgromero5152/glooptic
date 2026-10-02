@@ -92,7 +92,7 @@ const ingresar = async (usuario, clave) => signInWithEmailAndPassword(auth, awai
 const DOMINIO_PERSONAS = 'usuarios.miterraoptica.com';
 async function recuperar(usuario) {
   const c = await correoDe(usuario);
-  if (c.endsWith('@' + DOMINIO_PERSONAS)) throw new Error('Pídele al dueño de tu óptica que te ponga una contraseña nueva.');
+  if (c.endsWith('@' + DOMINIO_PERSONAS)) throw new Error('Pídele una contraseña nueva a quien te dio tu usuario.');
   return sendPasswordResetEmail(auth, c);
 }
 
