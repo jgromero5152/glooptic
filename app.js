@@ -603,7 +603,7 @@ function shell(key, content) {
       <a class="side-sell" href="#/nueva-orden">${icon('bag')}<span>Nueva venta</span></a>
       <a class="side-rap" href="#/nueva-orden?r=1">${icon('bolt')}<span>Venta rápida</span></a>
       <nav class="nav">${nav.filter(([k]) => puedeVer(k)).map(([k, t, i]) => `<a href="#/${k}" class="${active(k)}">${tile(k, i)}<span>${t}</span>${badge(k)}</a>`).join('')}</nav>
-      <div class="me"><div class="avatar">${initials(u.nombre)}</div><div><b>${esc(u.nombre)}</b><small>${ROLES[miRol()]}</small></div><button id="miclave" title="Cambiar mi contraseña">${icon('lock')}</button><button id="logout" title="Cerrar sesión">${icon('logout')}</button></div>
+      <div class="me"><button type="button" class="me-quien" id="mimenu" title="Mi cuenta"><div class="avatar">${initials(u.nombre)}</div><div><b>${esc(u.nombre)}</b><small>${ROLES[miRol()]}</small></div></button><button id="miclave" title="Cambiar mi contraseña">${icon('lock')}</button><button id="logout" title="Cerrar sesión">${icon('logout')}</button></div>
     </aside>
     <div class="main">
       <header class="top">
@@ -649,6 +649,11 @@ function cambiarClaveForm() {
 function bindShell() {
   const out = salirDeCuenta;
   $('#logout').onclick = out; $('#logout2').onclick = out; $('#miclave').onclick = cambiarClaveForm;
+  // Tocar el nombre abre las opciones de la cuenta (los iconos solos no se notaban).
+  $('#mimenu').onclick = () => modal({ title: esc((me() || {}).nombre || 'Mi cuenta'), body: `<div class="card" style="box-shadow:none">
+      <a class="list-item link" href="#" id="mclave"><span class="tile" style="--c:#475569">${icon('lock')}</span><span class="grow t">Cambiar mi contraseña</span></a>
+      <a class="list-item link" href="#" id="mout"><span class="tile" style="--c:#98a2b3">${icon('logout')}</span><span class="grow t">Cerrar sesión</span></a></div>`,
+    onMount: bg => { $('#mout', bg).onclick = e => { e.preventDefault(); closeModal(); out(); }; $('#mclave', bg).onclick = e => { e.preventDefault(); closeModal(); cambiarClaveForm(); }; } });
   $('#mas').onclick = e => {
     e.preventDefault();
     modal({ title: 'Más opciones', body: `<div class="card" style="box-shadow:none">${[['inventario', 'Inventario', 'glasses'], ['caja', 'Caja del día', 'cash'], ['movimientos', 'Ingresos y egresos', 'wallet'], ['reportes', 'Reportes', 'bars'], ['recordatorios', 'Recordatorios', 'bell'], ['ajustes', 'Ajustes', 'gear']]
@@ -4150,7 +4155,7 @@ function seedDemo() {
 }
 
 // Si se publicó una versión nueva, la app se actualiza sola al volver a abrirla.
-const APP_VERSION = '2026.10.02.1';
+const APP_VERSION = '2026.10.02.2';
 async function buscarActualizacion() {
   if (EN_CLAUDE || location.protocol === 'file:') return;
   try {
